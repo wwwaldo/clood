@@ -1,0 +1,61 @@
+#!/bin/bash
+
+ROLL=$((RANDOM % 5))
+
+if [ $ROLL -eq 0 ]; then
+  echo ""
+  echo "    🔨💥"
+  echo "   ╔═══╗"
+  echo "   ║ X ║  BONK!"
+  echo "   ╚═╦═╝"
+  echo "  ~~~║~~~"
+  echo "     ║"
+  echo ""
+  echo "  *** GOT 'EM! ***"
+  echo ""
+  exit 0
+else
+  POSES=(
+    "     🔨
+   ╔═══╗    \\
+   ║ ◉ ║     |
+   ╚═╦═╝    /
+  ~~~║~~~
+     ║
+
+  whiff..."
+
+    "         🔨
+   ╔═══╗
+   ║ ◉ ║  nyeh!
+   ╚═╦═╝
+  ~~~║~~~
+     ║
+
+  too slow!"
+
+    "  🔨
+   ╔═══╗
+   ║ ◕ ║  haha!
+   ╚═╦═╝
+  ~~~║~~~
+     ║
+
+  not even close!"
+
+    "              🔨
+   ╔═══╗
+   ║ ◉ ║  over here~
+   ╚═╦═╝
+  ~~~║~~~
+     ║
+
+  embarrassing..."
+  )
+
+  IDX=$((RANDOM % 4))
+  echo ""
+  echo "${POSES[$IDX]}"
+  echo ""
+  exit 1
+fi
