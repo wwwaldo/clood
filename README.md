@@ -18,11 +18,13 @@ src/
     enrichment.ts      # Prepends timestamps to user messages before API calls
     mood.ts            # Time-of-day mood system (chatty/focused/chill/sleepy)
     chatStorage.ts     # AsyncStorage persistence, keyed by date (YYYY-MM-DD)
+    memoryStorage.ts   # Topic-based long-term memory (ranked blob per topic)
+    dreaming.ts        # Nightly memory extraction — processes day's chat into topic blobs
     storage.ts         # SecureStore wrapper for API key
     notifications.ts   # Push notifications (daily 9am + test helper)
     theme.ts           # Design tokens (colors, spacing, radius, fonts)
   components/
-    ChatBubble.tsx     # Message bubble with entrance animations
+    ChatBubble.tsx     # Message bubble with entrance animations + "remembering..." state
     ChatInput.tsx      # Input bar with send/stop buttons
     MoodPill.tsx       # Header pill showing current mood emoji + label
 ```
@@ -40,11 +42,28 @@ Four moods mapped to time-of-day windows: chatty (6-10), focused (10-17), chill 
 ### Daily chat persistence
 One chat per day, keyed by `YYYY-MM-DD` in AsyncStorage. Today's chat auto-saves (debounced 1s) after every message. On app foreground, if the date has rolled over, current messages save under the old date and state clears for the new day.
 
-### Claude tool use: read_past_chat
-Claude has a `read_past_chat` tool that can load any past day's conversation by date. Available dates are listed in the system prompt. The tool execution loop in `chat.tsx` handles `tool_use` → `tool_result` → streaming final response, including recursive tool calls.
+### Memory system
+
+**Data model:** Each topic is a single living paragraph — not a list of atomic facts. `TopicMemory` has `topic`, `content` (the paragraph), `updatedAt`, and `rank` (importance score). Stored in AsyncStorage as `clood_topic_{name}`.
+
+**Rank:** +1 every day the topic comes up in conversation. Frequently-discussed topics naturally float to the top. Rank affects both system prompt inclusion order and dreaming priority.
+
+**Dreaming:** A nightly pass (runs on app mount if past 11pm or next morning) that sends the day's conversation + all existing topic blobs to Claude. Claude rewrites each topic paragraph with new info, creates new topics, merges overlapping ones, and flags which were mentioned today. Higher-ranked topics are processed first (earlier in context = more careful attention). This means memories evolve organically — stale info gets dropped, contradictions get resolved.
+
+**Automatic recall:** Top 5 topics by rank are injected directly into the system prompt — clood just *knows* these, like waking up. Remaining topics are listed by name + rank, accessible via the `recall` tool.
+
+**Recall tool:** When clood needs to remember something not in the top 5, it uses the `recall` tool. Tries exact topic match first, then fuzzy keyword search. The UI shows a subtle italic "remembering..." while the tool resolves — no visible function call.
+
+**Debug:** Long-press the "clood" title to trigger dreaming manually in dev mode.
+
+### Claude tools
+- `read_past_chat` — loads a specific day's conversation by date
+- `recall` — searches long-term memory by keyword or topic name
+
+The tool execution loop in `chat.tsx` handles `tool_use` -> `tool_result` -> streaming final response, including recursive tool calls.
 
 ### Notifications
-Daily local push notification at 9am. `sendTestNotification()` fires a test after 5s delay. Debug: long-press the "clood" title in dev mode. Requires a dev build (not Expo Go) and Apple Developer account for iOS.
+Daily local push notification at 9am. `sendTestNotification()` fires a test after 5s delay. Requires a dev build (not Expo Go) and Apple Developer account for iOS.
 
 ## Running
 
@@ -62,13 +81,3 @@ brew unlink ruby
 npx expo run:ios --device
 ```
 
-## What's not done yet
-
-See `TODO.md` for the OpenRouter refactor checklist. Other open items:
-
-- **Mood personality prompts** — current ones are one-liners, need expansion
-- **Proactive check-ins** — mood system was designed to support this but it's not wired up yet
-- **EAS / App Store publishing** — `eas init` + `eas build` when ready. Needs Apple Developer ($99/yr) for iOS, Google Play ($25 one-time) for Android
-- **Notification content** — currently hardcoded "chatty" greeting at 9am. Should pull from the actual 9am mood and vary the message
-- **Chat search** — no way to search across past chats yet
-- **Message persistence edge cases** — streaming messages that get interrupted may save partial assistant responses

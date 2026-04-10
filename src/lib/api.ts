@@ -1,3 +1,5 @@
+import { fetch as expoFetch } from "expo/fetch";
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
@@ -32,6 +34,22 @@ const TOOLS = [
       required: ["date"],
     },
   },
+  {
+    name: "recall",
+    description:
+      "Search your long-term memory for facts and context from past conversations. Use when the user references something you should know, or when you need more context about a topic not already in your memories above.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string" as const,
+          description:
+            "What to remember — keywords or a topic name",
+        },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 /**
@@ -56,7 +74,7 @@ export async function streamChat(
     };
     if (system) body.system = system;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await expoFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

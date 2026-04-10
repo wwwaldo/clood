@@ -31,6 +31,13 @@ import {
   formatChatForTool,
   dateKey,
 } from "../src/lib/chatStorage";
+import {
+  getAllMemories,
+  getTopic,
+  searchMemories,
+  type TopicMemory,
+} from "../src/lib/memoryStorage";
+import { dream, shouldDream } from "../src/lib/dreaming";
 import { ChatBubble } from "../src/components/ChatBubble";
 import { ChatInput } from "../src/components/ChatInput";
 import { MoodPill } from "../src/components/MoodPill";
@@ -41,6 +48,7 @@ export default function ChatScreen() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [apiKey, setApiKeyState] = useState("");
   const [chatDates, setChatDates] = useState<string[]>([]);
+  const [memories, setMemories] = useState<TopicMemory[]>([]);
   const flatListRef = useRef<FlatList>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamTextRef = useRef("");
@@ -63,6 +71,20 @@ export default function ChatScreen() {
 
       const dates = await listChatDates();
       setChatDates(dates);
+
+      // Run dreaming if overdue (past 11pm or next day)
+      if (await shouldDream()) {
+        try {
+          await dream(key);
+          console.log("[dreaming] completed");
+        } catch (e) {
+          console.error("[dreaming] failed:", e);
+        }
+      }
+
+      // Load memories for system prompt
+      const mems = await getAllMemories();
+      setMemories(mems);
     });
   }, []);
 
@@ -125,6 +147,29 @@ export default function ChatScreen() {
             type: "tool_result",
             tool_use_id: req.toolId,
             content: formatted,
+          });
+        } else if (req.toolName === "recall") {
+          const query = req.input.query as string;
+          // Try exact topic match first, then fuzzy search
+          const exact = await getTopic(query);
+          let content: string;
+          if (exact) {
+            content = `## ${exact.topic} (rank ${exact.rank})\n${exact.content}`;
+          } else {
+            const results = await searchMemories(query);
+            if (results.length === 0) {
+              content = `No memories found matching "${query}".`;
+            } else {
+              content = results
+                .slice(0, 5)
+                .map((m) => `## ${m.topic} (rank ${m.rank})\n${m.content}`)
+                .join("\n\n");
+            }
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
           });
         }
       }
@@ -224,7 +269,10 @@ export default function ChatScreen() {
 
       const history = enrichMessages([...messages, userMsg]);
       const dates = await listChatDates();
-      const system = getSystemPrompt(dates.filter((d) => d !== dateKey()));
+      const system = getSystemPrompt(
+        dates.filter((d) => d !== dateKey()),
+        memories
+      );
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -370,7 +418,23 @@ export default function ChatScreen() {
         </View>
         <View style={styles.headerCenter}>
           <TouchableOpacity
-            onLongPress={__DEV__ ? () => sendTestNotification() : undefined}
+            onLongPress={
+              __DEV__
+                ? async () => {
+                    console.log("[debug] triggering dream...");
+                    try {
+                      const results = await dream(apiKey);
+                      console.log("[debug] dream complete:", results.length, "topics");
+                      const mems = await getAllMemories();
+                      setMemories(mems);
+                      Alert.alert("Dream complete", `Processed ${results.length} topics`);
+                    } catch (e: any) {
+                      console.error("[debug] dream failed:", e);
+                      Alert.alert("Dream failed", e.message);
+                    }
+                  }
+                : undefined
+            }
             activeOpacity={0.8}
           >
             <View style={styles.headerTitleRow}>

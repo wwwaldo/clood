@@ -1,3 +1,5 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 export type MoodName = "chatty" | "focused" | "sleepy" | "chill";
 
 export interface Mood {
@@ -62,7 +64,64 @@ const SCHEDULE: ScheduleSlot[] = [
   { hours: [21, 6], mood: "sleepy" }, // wraps midnight
 ];
 
-export function getCurrentMood(): Mood {
+export const ALL_MOODS: Mood[] = [
+  MOODS.chatty,
+  MOODS.focused,
+  MOODS.chill,
+  MOODS.sleepy,
+];
+
+// --- Manual override ---
+// When set, replaces the time-based mood until cleared. Persisted across launches.
+const OVERRIDE_KEY = "clood_mood_override";
+let overrideMood: MoodName | null = null;
+let overrideHydrated = false;
+
+type Listener = () => void;
+const listeners = new Set<Listener>();
+
+function notify() {
+  listeners.forEach((l) => l());
+}
+
+export function subscribeToMood(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+export async function hydrateMoodOverride(): Promise<void> {
+  if (overrideHydrated) return;
+  try {
+    const stored = await AsyncStorage.getItem(OVERRIDE_KEY);
+    if (stored && stored in MOODS) {
+      overrideMood = stored as MoodName;
+    }
+  } catch {
+    // ignore
+  }
+  overrideHydrated = true;
+  notify();
+}
+
+export function getMoodOverride(): MoodName | null {
+  return overrideMood;
+}
+
+export async function setMoodOverride(name: MoodName | null): Promise<void> {
+  overrideMood = name;
+  try {
+    if (name) {
+      await AsyncStorage.setItem(OVERRIDE_KEY, name);
+    } else {
+      await AsyncStorage.removeItem(OVERRIDE_KEY);
+    }
+  } catch {
+    // ignore
+  }
+  notify();
+}
+
+function getScheduledMood(): Mood {
   const hour = new Date().getHours();
 
   for (const slot of SCHEDULE) {
@@ -79,11 +138,24 @@ export function getCurrentMood(): Mood {
   return MOODS.chill; // fallback
 }
 
-export function getSystemPrompt(availableChatDates?: string[]): string {
+export function getCurrentMood(): Mood {
+  if (overrideMood) return MOODS[overrideMood];
+  return getScheduledMood();
+}
+
+import type { TopicMemory } from "./memoryStorage";
+
+const TOP_MEMORY_COUNT = 5;
+
+export function getSystemPrompt(
+  availableChatDates?: string[],
+  memories?: TopicMemory[]
+): string {
   const mood = getCurrentMood();
+  const isManual = overrideMood !== null;
   const lines = [
     "You are clood, a personal AI assistant.",
-    `Your current mood is: ${mood.label}.`,
+    `Your current mood is: ${mood.label}${isManual ? " (manually set by the user)" : ""}.`,
     mood.personality,
     "User messages include timestamps in brackets — use them to be aware of time but don't mention them unless relevant.",
     "Each day starts a fresh conversation. You have a tool to read past days' chats if the user references something from before.",
@@ -93,6 +165,34 @@ export function getSystemPrompt(availableChatDates?: string[]): string {
     lines.push(
       `Past chat history is available for these dates: ${availableChatDates.join(", ")}.`
     );
+  }
+
+  // Inject memories — top N by rank in full, rest listed by name
+  if (memories && memories.length > 0) {
+    const sorted = [...memories].sort((a, b) => b.rank - a.rank);
+    const top = sorted.slice(0, TOP_MEMORY_COUNT);
+    const rest = sorted.slice(TOP_MEMORY_COUNT);
+
+    lines.push("");
+    lines.push("## Your memories (most important first)");
+    for (const mem of top) {
+      lines.push(`### ${mem.topic} (rank ${mem.rank})`);
+      lines.push(mem.content);
+      lines.push("");
+    }
+
+    if (rest.length > 0) {
+      const restList = rest
+        .map((m) => `${m.topic} (rank ${m.rank})`)
+        .join(", ");
+      lines.push("## Other things you remember");
+      lines.push(
+        `You also have memories about: ${restList}`
+      );
+      lines.push(
+        "Use the recall tool if these come up."
+      );
+    }
   }
 
   return lines.join("\n");

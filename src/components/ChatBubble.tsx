@@ -31,13 +31,17 @@ export function ChatBubble({ role, content, isStreaming, index }: Props) {
           isUser ? styles.bubbleUser : styles.bubbleAssistant,
         ]}
       >
-        <Text
-          style={[styles.text, isUser ? styles.textUser : styles.textAssistant]}
-          selectable
-        >
-          {content}
-          {isStreaming && <Text style={styles.cursor}>|</Text>}
-        </Text>
+        {!isUser && isStreaming && !content ? (
+          <Text style={styles.remembering}>remembering...</Text>
+        ) : (
+          <Text
+            style={[styles.text, isUser ? styles.textUser : styles.textAssistant]}
+            selectable
+          >
+            {content}
+            {isStreaming && <Text style={styles.cursor}>|</Text>}
+          </Text>
+        )}
       </View>
     </Animated.View>
   );
@@ -99,5 +103,10 @@ const styles = StyleSheet.create({
   cursor: {
     color: theme.colors.accent,
     fontWeight: "300",
+  },
+  remembering: {
+    color: theme.colors.textDim,
+    fontSize: theme.font.size.sm,
+    fontStyle: "italic",
   },
 });
