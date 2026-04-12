@@ -114,7 +114,7 @@ export default function ChatScreen() {
     if (messages.length === 0) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveChat(messages);
+      saveChat(messages, currentDateRef.current);
     }, 1000);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -327,15 +327,6 @@ export default function ChatScreen() {
     abortRef.current = null;
   }, []);
 
-  const handleNewChat = useCallback(async () => {
-    if (isStreaming) handleStop();
-    // Save current messages before clearing
-    if (messages.length > 0) {
-      await saveChat(messages);
-    }
-    setMessages([]);
-  }, [isStreaming, handleStop, messages]);
-
   const handleLogout = useCallback(() => {
     const doLogout = async () => {
       if (isStreaming) handleStop();
@@ -404,13 +395,6 @@ export default function ChatScreen() {
           >
             <Ionicons
               name="time-outline"
-              size={22}
-              color={theme.colors.textDim}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
-            <Ionicons
-              name="create-outline"
               size={22}
               color={theme.colors.textDim}
             />
