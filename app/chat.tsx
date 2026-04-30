@@ -15,13 +15,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { theme } from "../src/lib/theme";
-import { getApiKey, deleteApiKey } from "../src/lib/storage";
+import { getApiKey, deleteApiKey, getCustomPrompt } from "../src/lib/storage";
 import { streamChat, type Message, type ToolUseRequest } from "../src/lib/api";
 import { enrichMessages } from "../src/lib/enrichment";
 import { getSystemPrompt } from "../src/lib/mood";
 import {
   scheduleDailyNotification,
   sendTestNotification,
+  scheduleCheckIns,
+  type CheckIn,
 } from "../src/lib/notifications";
 import {
   saveChat,
@@ -38,9 +40,16 @@ import {
   type TopicMemory,
 } from "../src/lib/memoryStorage";
 import { dream, shouldDream } from "../src/lib/dreaming";
+import {
+  getEvents,
+  createEvent,
+  deleteEvent,
+  formatEventsForTool,
+} from "../src/lib/calendar";
 import { ChatBubble } from "../src/components/ChatBubble";
 import { ChatInput } from "../src/components/ChatInput";
 import { MoodPill } from "../src/components/MoodPill";
+import { MenuSheet } from "../src/components/MenuSheet";
 
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
@@ -49,6 +58,8 @@ export default function ChatScreen() {
   const [apiKey, setApiKeyState] = useState("");
   const [chatDates, setChatDates] = useState<string[]>([]);
   const [memories, setMemories] = useState<TopicMemory[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [customPrompt, setCustomPromptState] = useState("");
   const flatListRef = useRef<FlatList>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamTextRef = useRef("");
@@ -82,9 +93,11 @@ export default function ChatScreen() {
         }
       }
 
-      // Load memories for system prompt
+      // Load memories and custom prompt for system prompt
       const mems = await getAllMemories();
       setMemories(mems);
+      const cp = await getCustomPrompt();
+      setCustomPromptState(cp);
     });
   }, []);
 
@@ -114,7 +127,7 @@ export default function ChatScreen() {
     if (messages.length === 0) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveChat(messages);
+      saveChat(messages, currentDateRef.current);
     }, 1000);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -154,7 +167,10 @@ export default function ChatScreen() {
           const exact = await getTopic(query);
           let content: string;
           if (exact) {
-            content = `## ${exact.topic} (rank ${exact.rank})\n${exact.content}`;
+            const related = exact.links.length
+              ? `\nRelated: ${exact.links.join(", ")}`
+              : "";
+            content = `## ${exact.topic} (rank ${exact.rank})\n${exact.content}${related}`;
           } else {
             const results = await searchMemories(query);
             if (results.length === 0) {
@@ -162,9 +178,80 @@ export default function ChatScreen() {
             } else {
               content = results
                 .slice(0, 5)
-                .map((m) => `## ${m.topic} (rank ${m.rank})\n${m.content}`)
+                .map((m) => {
+                  const related = m.links.length
+                    ? `\nRelated: ${m.links.join(", ")}`
+                    : "";
+                  return `## ${m.topic} (rank ${m.rank})\n${m.content}${related}`;
+                })
                 .join("\n\n");
             }
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "get_calendar_events") {
+          const startDate = req.input.startDate as string;
+          const endDate = req.input.endDate as string;
+          let content: string;
+          try {
+            const events = await getEvents(startDate, endDate);
+            content = formatEventsForTool(events, startDate, endDate);
+          } catch (e: any) {
+            content = `Calendar error: ${e.message}`;
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "create_calendar_event") {
+          const { title, startDate, endDate, notes, location } = req.input as {
+            title: string;
+            startDate: string;
+            endDate: string;
+            notes?: string;
+            location?: string;
+          };
+          let content: string;
+          try {
+            const eventId = await createEvent(title, startDate, endDate, notes, location);
+            content = `Event "${title}" created successfully. [id: ${eventId}]`;
+          } catch (e: any) {
+            content = `Failed to create event: ${e.message}`;
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "delete_calendar_event") {
+          const eventId = req.input.eventId as string;
+          let content: string;
+          try {
+            await deleteEvent(eventId);
+            content = `Event ${eventId} deleted successfully.`;
+          } catch (e: any) {
+            content = `Failed to delete event: ${e.message}`;
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "schedule_checkins") {
+          const checkins = req.input.checkins as CheckIn[];
+          let content: string;
+          try {
+            const result = await scheduleCheckIns(checkins);
+            content = `Scheduled ${result.scheduled} check-in(s).`;
+            if (result.skipped > 0) {
+              content += ` ${result.skipped} skipped (time already passed).`;
+            }
+          } catch (e: any) {
+            content = `Failed to schedule check-ins: ${e.message}`;
           }
           toolResults.push({
             type: "tool_result",
@@ -271,7 +358,8 @@ export default function ChatScreen() {
       const dates = await listChatDates();
       const system = getSystemPrompt(
         dates.filter((d) => d !== dateKey()),
-        memories
+        memories,
+        customPrompt
       );
 
       const controller = new AbortController();
@@ -318,7 +406,7 @@ export default function ChatScreen() {
         abortRef.current = null;
       }
     },
-    [apiKey, messages, isStreaming, scrollToEnd, handleToolUse]
+    [apiKey, messages, isStreaming, scrollToEnd, handleToolUse, customPrompt]
   );
 
   const handleStop = useCallback(() => {
@@ -326,15 +414,6 @@ export default function ChatScreen() {
     setIsStreaming(false);
     abortRef.current = null;
   }, []);
-
-  const handleNewChat = useCallback(async () => {
-    if (isStreaming) handleStop();
-    // Save current messages before clearing
-    if (messages.length > 0) {
-      await saveChat(messages);
-    }
-    setMessages([]);
-  }, [isStreaming, handleStop, messages]);
 
   const handleLogout = useCallback(() => {
     const doLogout = async () => {
@@ -408,45 +487,30 @@ export default function ChatScreen() {
               color={theme.colors.textDim}
             />
           </TouchableOpacity>
-          <TouchableOpacity onPress={handleNewChat} style={styles.headerButton}>
+          <TouchableOpacity
+            onPress={() => router.push("/wiki")}
+            style={styles.headerButton}
+          >
             <Ionicons
-              name="create-outline"
+              name="book-outline"
               size={22}
               color={theme.colors.textDim}
             />
           </TouchableOpacity>
         </View>
         <View style={styles.headerCenter}>
-          <TouchableOpacity
-            onLongPress={
-              __DEV__
-                ? async () => {
-                    console.log("[debug] triggering dream...");
-                    try {
-                      const results = await dream(apiKey);
-                      console.log("[debug] dream complete:", results.length, "topics");
-                      const mems = await getAllMemories();
-                      setMemories(mems);
-                      Alert.alert("Dream complete", `Processed ${results.length} topics`);
-                    } catch (e: any) {
-                      console.error("[debug] dream failed:", e);
-                      Alert.alert("Dream failed", e.message);
-                    }
-                  }
-                : undefined
-            }
-            activeOpacity={0.8}
-          >
-            <View style={styles.headerTitleRow}>
-              <Text style={styles.headerTitle}>clood</Text>
-              <View style={styles.headerDot} />
-            </View>
-          </TouchableOpacity>
+          <View style={styles.headerTitleRow}>
+            <Text style={styles.headerTitle}>clood</Text>
+            <View style={styles.headerDot} />
+          </View>
           <MoodPill />
         </View>
-        <TouchableOpacity onPress={handleLogout} style={styles.headerButton}>
+        <TouchableOpacity
+          onPress={() => setMenuOpen(true)}
+          style={styles.headerButton}
+        >
           <Ionicons
-            name="log-out-outline"
+            name="ellipsis-horizontal"
             size={22}
             color={theme.colors.textDim}
           />
@@ -477,6 +541,22 @@ export default function ChatScreen() {
           isStreaming={isStreaming}
         />
       </View>
+      <MenuSheet
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onDream={async () => {
+          try {
+            const results = await dream(apiKey);
+            const mems = await getAllMemories();
+            setMemories(mems);
+            Alert.alert("Dream complete", `Processed ${results.length} topics`);
+          } catch (e: any) {
+            Alert.alert("Dream failed", e.message);
+          }
+        }}
+        onCustomPromptChange={setCustomPromptState}
+        onLogout={handleLogout}
+      />
     </KeyboardAvoidingView>
   );
 }

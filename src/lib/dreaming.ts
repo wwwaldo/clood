@@ -4,6 +4,7 @@ import {
   saveTopic,
   getLastDreamDate,
   setLastDreamDate,
+  extractWikiLinks,
   type TopicMemory,
 } from "./memoryStorage";
 import { dateKey } from "./chatStorage";
@@ -20,9 +21,11 @@ You have existing memory topics (sorted by importance/rank). Your job:
 6. Write each topic as a natural, dense paragraph — not bullet points
 7. Drop stale or contradicted info. Memories should reflect current truth.
 8. Only return topics that have meaningful content — don't create empty ones
+9. Cross-reference related topics using [[topic name]] syntax in the content. For example, if "cooking" relates to "meal prep", write "...enjoys [[meal prep]] on Sundays..."
+10. Include a "links" array listing all topic names you referenced via [[...]] in the content.
 
 Return ONLY valid JSON, no markdown fences:
-[{ "topic": "string", "content": "string", "mentioned": boolean }]`;
+[{ "topic": "string", "content": "string", "mentioned": boolean, "links": ["string"] }]`;
 
 function formatExistingMemories(memories: TopicMemory[]): string {
   if (memories.length === 0) return "No existing memories yet.";
@@ -44,6 +47,7 @@ interface DreamResult {
   topic: string;
   content: string;
   mentioned: boolean;
+  links: string[];
 }
 
 /**
@@ -107,7 +111,10 @@ export async function dream(apiKey: string): Promise<DreamResult[]> {
   for (const result of results) {
     const existingRank = rankMap.get(result.topic.toLowerCase().trim()) ?? 0;
     const newRank = result.mentioned ? existingRank + 1 : Math.max(existingRank, 1);
-    await saveTopic(result.topic, result.content, newRank);
+    const contentLinks = extractWikiLinks(result.content);
+    const declaredLinks = (result.links ?? []).map((l) => l.toLowerCase().trim());
+    const mergedLinks = [...new Set([...declaredLinks, ...contentLinks])];
+    await saveTopic(result.topic, result.content, newRank, mergedLinks);
   }
 
   // Mark today as dreamed
