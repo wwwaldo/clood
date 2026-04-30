@@ -144,12 +144,14 @@ export function getCurrentMood(): Mood {
 }
 
 import type { TopicMemory } from "./memoryStorage";
+import { getTodayMealPlan, formatMealPlanForPrompt } from "./mealPlan";
 
 const TOP_MEMORY_COUNT = 5;
 
 export function getSystemPrompt(
   availableChatDates?: string[],
-  memories?: TopicMemory[]
+  memories?: TopicMemory[],
+  customPrompt?: string
 ): string {
   const mood = getCurrentMood();
   const isManual = overrideMood !== null;
@@ -178,6 +180,9 @@ export function getSystemPrompt(
     for (const mem of top) {
       lines.push(`### ${mem.topic} (rank ${mem.rank})`);
       lines.push(mem.content);
+      if (mem.links.length > 0) {
+        lines.push(`Related: ${mem.links.join(", ")}`);
+      }
       lines.push("");
     }
 
@@ -193,6 +198,17 @@ export function getSystemPrompt(
         "Use the recall tool if these come up."
       );
     }
+  }
+
+  // Inject today's meal plan
+  const mealPlan = getTodayMealPlan();
+  lines.push("");
+  lines.push(formatMealPlanForPrompt(mealPlan));
+
+  if (customPrompt?.trim()) {
+    lines.push("");
+    lines.push("## Custom instructions from the user");
+    lines.push(customPrompt.trim());
   }
 
   return lines.join("\n");

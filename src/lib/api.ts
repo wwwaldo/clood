@@ -50,6 +50,104 @@ const TOOLS = [
       required: ["query"],
     },
   },
+  {
+    name: "get_calendar_events",
+    description:
+      "Get events from the user's device calendar within a date range. Use when the user asks about their schedule, upcoming events, or what's on their calendar.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        startDate: {
+          type: "string" as const,
+          description: "Start date in YYYY-MM-DD format",
+        },
+        endDate: {
+          type: "string" as const,
+          description: "End date in YYYY-MM-DD format",
+        },
+      },
+      required: ["startDate", "endDate"],
+    },
+  },
+  {
+    name: "create_calendar_event",
+    description:
+      "Create a new event on the user's device calendar. Use when the user wants to schedule, add, or book something.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string" as const,
+          description: "Event title",
+        },
+        startDate: {
+          type: "string" as const,
+          description: "Start date and time in ISO 8601 format, e.g. '2026-04-30T14:00:00'",
+        },
+        endDate: {
+          type: "string" as const,
+          description: "End date and time in ISO 8601 format, e.g. '2026-04-30T15:00:00'",
+        },
+        notes: {
+          type: "string" as const,
+          description: "Optional notes or description for the event",
+        },
+        location: {
+          type: "string" as const,
+          description: "Optional location for the event",
+        },
+      },
+      required: ["title", "startDate", "endDate"],
+    },
+  },
+  {
+    name: "delete_calendar_event",
+    description:
+      "Delete an event from the user's device calendar by its ID. Use when the user wants to cancel or remove an event. You must know the event ID — use get_calendar_events first if needed.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        eventId: {
+          type: "string" as const,
+          description: "The ID of the event to delete",
+        },
+      },
+      required: ["eventId"],
+    },
+  },
+  {
+    name: "schedule_checkins",
+    description:
+      "Schedule up to 3 push notification check-ins for the rest of today. Use this proactively to set reminders, follow-ups, or just to check in on the user later. Each check-in is a notification that appears on their phone. Past times are skipped. Previous check-ins are replaced.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        checkins: {
+          type: "array" as const,
+          description: "Array of check-ins to schedule (max 3)",
+          items: {
+            type: "object" as const,
+            properties: {
+              hour: {
+                type: "number" as const,
+                description: "Hour in 24h format (0-23)",
+              },
+              minute: {
+                type: "number" as const,
+                description: "Minute (0-59)",
+              },
+              message: {
+                type: "string" as const,
+                description: "The notification message the user will see",
+              },
+            },
+            required: ["hour", "minute", "message"],
+          },
+        },
+      },
+      required: ["checkins"],
+    },
+  },
 ];
 
 /**

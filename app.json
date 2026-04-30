@@ -34,7 +34,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Clood needs calendar access to read and manage your events."
+        }
+      ]
     ],
     "extra": {
       "router": {},

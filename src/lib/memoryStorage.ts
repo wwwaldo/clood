@@ -5,18 +5,35 @@ export interface TopicMemory {
   content: string;
   updatedAt: number;
   rank: number;
+  links: string[];
 }
 
 const TOPICS_KEY = "clood_topics";
 const TOPIC_PREFIX = "clood_topic_";
 const LAST_DREAM_KEY = "clood_last_dream";
 
+// --- Wiki link helpers ---
+
+export function extractWikiLinks(content: string): string[] {
+  const matches = content.matchAll(/\[\[(.+?)\]\]/g);
+  const links = new Set<string>();
+  for (const match of matches) {
+    links.add(match[1].toLowerCase().trim());
+  }
+  return Array.from(links);
+}
+
+export function stripWikiLinks(content: string): string {
+  return content.replace(/\[\[(.+?)\]\]/g, "$1");
+}
+
 // --- Topic CRUD ---
 
 export async function saveTopic(
   topic: string,
   content: string,
-  rank?: number
+  rank?: number,
+  links?: string[]
 ): Promise<void> {
   const normalized = topic.toLowerCase().trim();
   const existing = await getTopic(normalized);
@@ -26,6 +43,7 @@ export async function saveTopic(
     content,
     updatedAt: Date.now(),
     rank: rank ?? existing?.rank ?? 1,
+    links: links ?? existing?.links ?? [],
   };
 
   await AsyncStorage.setItem(
@@ -47,7 +65,8 @@ export async function getTopic(topic: string): Promise<TopicMemory | null> {
   const raw = await AsyncStorage.getItem(TOPIC_PREFIX + topic.toLowerCase().trim());
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as TopicMemory;
+    const parsed = JSON.parse(raw) as TopicMemory;
+    return { ...parsed, links: parsed.links ?? [] };
   } catch {
     return null;
   }
@@ -81,6 +100,25 @@ export async function deleteTopic(topic: string): Promise<void> {
   await AsyncStorage.setItem(
     TOPICS_KEY,
     JSON.stringify(topics.filter((t) => t !== normalized))
+  );
+}
+
+export async function updateTopicContent(
+  topic: string,
+  content: string
+): Promise<void> {
+  const existing = await getTopic(topic);
+  if (!existing) return;
+  const links = extractWikiLinks(content);
+  const memory: TopicMemory = {
+    ...existing,
+    content,
+    links,
+    updatedAt: Date.now(),
+  };
+  await AsyncStorage.setItem(
+    TOPIC_PREFIX + existing.topic,
+    JSON.stringify(memory)
   );
 }
 
