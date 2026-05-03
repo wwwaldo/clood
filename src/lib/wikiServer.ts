@@ -21,6 +21,18 @@ function parseHttpRequest(raw: string) {
   return { method, path: decodeURIComponent(path), body };
 }
 
+function utf8ByteLength(str: string): number {
+  let bytes = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code <= 0xffff) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
+}
+
 function httpResponse(
   status: number,
   statusText: string,
@@ -30,7 +42,7 @@ function httpResponse(
   return [
     `HTTP/1.1 ${status} ${statusText}`,
     `Content-Type: ${contentType}`,
-    `Content-Length: ${Buffer.byteLength(body, "utf-8")}`,
+    `Content-Length: ${utf8ByteLength(body)}`,
     "Connection: close",
     "Access-Control-Allow-Origin: *",
     "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS",
