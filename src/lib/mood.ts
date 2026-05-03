@@ -148,11 +148,11 @@ import { getTodayMealPlan, formatMealPlanForPrompt } from "./mealPlan";
 
 const TOP_MEMORY_COUNT = 5;
 
-export function getSystemPrompt(
+export async function getSystemPrompt(
   availableChatDates?: string[],
   memories?: TopicMemory[],
   customPrompt?: string
-): string {
+): Promise<string> {
   const mood = getCurrentMood();
   const isManual = overrideMood !== null;
   const lines = [
@@ -201,7 +201,7 @@ export function getSystemPrompt(
   }
 
   // Inject today's meal plan
-  const mealPlan = getTodayMealPlan();
+  const mealPlan = await getTodayMealPlan();
   lines.push("");
   lines.push(formatMealPlanForPrompt(mealPlan));
 

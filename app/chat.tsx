@@ -23,7 +23,7 @@ import {
   scheduleDailyNotification,
   sendTestNotification,
   scheduleCheckIns,
-  type CheckIn,
+  type ScheduledCheckIn,
 } from "../src/lib/notifications";
 import {
   saveChat,
@@ -40,6 +40,11 @@ import {
   type TopicMemory,
 } from "../src/lib/memoryStorage";
 import { dream, shouldDream } from "../src/lib/dreaming";
+import {
+  getDayPlan,
+  getAllDayPlans,
+  formatMealPlanForTool,
+} from "../src/lib/mealPlan";
 import {
   getEvents,
   createEvent,
@@ -192,6 +197,25 @@ export default function ChatScreen() {
             tool_use_id: req.toolId,
             content,
           });
+        } else if (req.toolName === "get_meal_plan") {
+          const day = (req.input.day as string).toLowerCase().trim();
+          let content: string;
+          if (day === "all") {
+            const plans = await getAllDayPlans();
+            content = plans
+              .map((p) => formatMealPlanForTool(p))
+              .join("\n\n---\n\n");
+          } else {
+            const plan = await getDayPlan(day);
+            content = plan
+              ? formatMealPlanForTool(plan)
+              : `No meal plan found for "${day}". Valid days: Monday–Sunday.`;
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
         } else if (req.toolName === "get_calendar_events") {
           const startDate = req.input.startDate as string;
           const endDate = req.input.endDate as string;
@@ -242,11 +266,15 @@ export default function ChatScreen() {
             content,
           });
         } else if (req.toolName === "schedule_checkins") {
-          const checkins = req.input.checkins as CheckIn[];
+          const checkins = req.input.checkins as {
+            hour: number;
+            minute: number;
+            reason: string;
+          }[];
           let content: string;
           try {
             const result = await scheduleCheckIns(checkins);
-            content = `Scheduled ${result.scheduled} check-in(s).`;
+            content = `Scheduled ${result.scheduled} check-in(s). At each time, you'll be woken up to generate a fresh message.`;
             if (result.skipped > 0) {
               content += ` ${result.skipped} skipped (time already passed).`;
             }
@@ -356,7 +384,7 @@ export default function ChatScreen() {
 
       const history = enrichMessages([...messages, userMsg]);
       const dates = await listChatDates();
-      const system = getSystemPrompt(
+      const system = await getSystemPrompt(
         dates.filter((d) => d !== dateKey()),
         memories,
         customPrompt

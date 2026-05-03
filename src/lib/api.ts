@@ -51,6 +51,22 @@ const TOOLS = [
     },
   },
   {
+    name: "get_meal_plan",
+    description:
+      "Look up the meal plan for any day of the week. Use when the user asks about meals on a day other than today, or wants to see the full week's plan. Today's meals are already in your system prompt — use this for other days.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        day: {
+          type: "string" as const,
+          description:
+            "Day of the week, e.g. 'monday', 'tuesday'. Use 'all' to get the full week.",
+        },
+      },
+      required: ["day"],
+    },
+  },
+  {
     name: "get_calendar_events",
     description:
       "Get events from the user's device calendar within a date range. Use when the user asks about their schedule, upcoming events, or what's on their calendar.",
@@ -118,7 +134,7 @@ const TOOLS = [
   {
     name: "schedule_checkins",
     description:
-      "Schedule up to 3 push notification check-ins for the rest of today. Use this proactively to set reminders, follow-ups, or just to check in on the user later. Each check-in is a notification that appears on their phone. Past times are skipped. Previous check-ins are replaced.",
+      "Schedule up to 3 times today when you want to proactively reach out to the user. At each time, you'll be woken up in the background to generate a fresh, context-aware message based on the time, meal plan, memories, and your reason. The message appears as a push notification and is saved to the chat. Past times are skipped. Previous check-ins are replaced.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -136,12 +152,12 @@ const TOOLS = [
                 type: "number" as const,
                 description: "Minute (0-59)",
               },
-              message: {
+              reason: {
                 type: "string" as const,
-                description: "The notification message the user will see",
+                description: "Why you want to check in — context for your future self when generating the message (e.g. 'remind about lunch', 'ask how the meeting went')",
               },
             },
-            required: ["hour", "minute", "message"],
+            required: ["hour", "minute", "reason"],
           },
         },
       },

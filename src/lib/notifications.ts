@@ -1,4 +1,5 @@
 import * as Notifications from "expo-notifications";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 
 // Configure how notifications appear when the app is in the foreground
@@ -12,9 +13,15 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Category IDs for filtering scheduled notifications
 const DAILY_CATEGORY = "clood_daily";
-const CHECKIN_CATEGORY = "clood_checkin";
+const CHECKINS_STORAGE_KEY = "clood_scheduled_checkins";
+
+export interface ScheduledCheckIn {
+  hour: number;
+  minute: number;
+  reason: string;
+  fired: boolean;
+}
 
 export async function requestPermissions(): Promise<boolean> {
   if (Platform.OS === "web") return false;
@@ -26,9 +33,6 @@ export async function requestPermissions(): Promise<boolean> {
   return status === "granted";
 }
 
-/**
- * Cancel only notifications matching a given category.
- */
 async function cancelByCategory(category: string): Promise<void> {
   const all = await Notifications.getAllScheduledNotificationsAsync();
   for (const n of all) {
@@ -40,7 +44,6 @@ async function cancelByCategory(category: string): Promise<void> {
 
 /**
  * Schedule a daily local notification at 9:00 AM.
- * Only cancels existing daily notifications, not check-ins.
  */
 export async function scheduleDailyNotification(): Promise<void> {
   if (Platform.OS === "web") return;
@@ -65,88 +68,113 @@ export async function scheduleDailyNotification(): Promise<void> {
   });
 }
 
-export interface CheckIn {
-  hour: number;   // 0-23
-  minute: number; // 0-59
-  message: string;
-}
+// --- Check-in storage (background task reads these) ---
 
 /**
- * Schedule check-in notifications for today. Clood decides when and what to say.
- * Cancels any existing check-ins first, then schedules up to 3 new ones.
- * Check-ins in the past (earlier today) are skipped.
+ * Store check-in times for the background task to process.
+ * Replaces any existing check-ins. Past times are skipped.
  */
 export async function scheduleCheckIns(
-  checkIns: CheckIn[]
+  checkIns: { hour: number; minute: number; reason: string }[]
 ): Promise<{ scheduled: number; skipped: number }> {
-  if (Platform.OS === "web") return { scheduled: 0, skipped: 0 };
-
-  const granted = await requestPermissions();
-  if (!granted) throw new Error("Notification permission not granted");
-
-  // Clear old check-ins
-  await cancelByCategory(CHECKIN_CATEGORY);
-
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   let scheduled = 0;
   let skipped = 0;
 
-  // Limit to 3
-  const limited = checkIns.slice(0, 3);
+  const stored: ScheduledCheckIn[] = [];
 
-  for (const ci of limited) {
+  for (const ci of checkIns.slice(0, 3)) {
     const ciMinutes = ci.hour * 60 + ci.minute;
     if (ciMinutes <= currentMinutes) {
-      // This time already passed today
       skipped++;
       continue;
     }
-
-    // Schedule as a time interval from now
-    const diffSeconds = (ciMinutes - currentMinutes) * 60;
-
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "clood",
-        body: ci.message,
-        categoryIdentifier: CHECKIN_CATEGORY,
-        sound: true,
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-        seconds: diffSeconds,
-      },
-    });
+    stored.push({ ...ci, fired: false });
     scheduled++;
+  }
+
+  await AsyncStorage.setItem(CHECKINS_STORAGE_KEY, JSON.stringify(stored));
+
+  // Ensure notification permissions for when background task fires
+  if (Platform.OS !== "web") {
+    await requestPermissions();
   }
 
   return { scheduled, skipped };
 }
 
 /**
- * Cancel all scheduled check-ins.
+ * Get pending (unfired) check-ins that are due.
  */
-export async function cancelCheckIns(): Promise<void> {
+export async function getDueCheckIns(): Promise<ScheduledCheckIn[]> {
+  const raw = await AsyncStorage.getItem(CHECKINS_STORAGE_KEY);
+  if (!raw) return [];
+
+  let checkIns: ScheduledCheckIn[];
+  try {
+    checkIns = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  return checkIns.filter(
+    (ci) => !ci.fired && ci.hour * 60 + ci.minute <= currentMinutes
+  );
+}
+
+/**
+ * Mark a check-in as fired so it doesn't trigger again.
+ */
+export async function markCheckInFired(
+  hour: number,
+  minute: number
+): Promise<void> {
+  const raw = await AsyncStorage.getItem(CHECKINS_STORAGE_KEY);
+  if (!raw) return;
+
+  let checkIns: ScheduledCheckIn[];
+  try {
+    checkIns = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  const updated = checkIns.map((ci) =>
+    ci.hour === hour && ci.minute === minute ? { ...ci, fired: true } : ci
+  );
+  await AsyncStorage.setItem(CHECKINS_STORAGE_KEY, JSON.stringify(updated));
+}
+
+/**
+ * Fire a notification with Claude's check-in message.
+ */
+export async function fireCheckInNotification(
+  message: string
+): Promise<void> {
   if (Platform.OS === "web") return;
-  await cancelByCategory(CHECKIN_CATEGORY);
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "clood",
+      body: message,
+      sound: true,
+    },
+    trigger: null, // fire immediately
+  });
 }
 
 /**
  * Fire a test notification after a short delay.
- * Only intended for dev/debug use.
  */
 export async function sendTestNotification(): Promise<void> {
-  if (Platform.OS === "web") {
-    console.log("[notifications] skipped on web");
-    return;
-  }
+  if (Platform.OS === "web") return;
 
   const granted = await requestPermissions();
-  if (!granted) {
-    console.log("[notifications] permission denied");
-    return;
-  }
+  if (!granted) return;
 
   await Notifications.scheduleNotificationAsync({
     content: {
