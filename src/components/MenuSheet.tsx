@@ -10,13 +10,28 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  Switch,
 } from "react-native";
+import Slider from "@react-native-community/slider";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { theme } from "../lib/theme";
 import { getCustomPrompt, setCustomPrompt } from "../lib/storage";
+import {
+  getHeartbeatSettings,
+  setHeartbeatSettings,
+  type HeartbeatSettings,
+} from "../lib/checkinTask";
+import {
+  getSelectedModel,
+  setSelectedModel,
+  getSpiceMode,
+  setSpiceMode,
+  BEDROCK_MODELS,
+  type BedrockModel,
+} from "../lib/storage";
 
-type MenuView = "menu" | "prompt";
+type MenuView = "menu" | "prompt" | "heartbeat" | "model";
 
 interface MenuSheetProps {
   visible: boolean;
@@ -37,12 +52,43 @@ export function MenuSheet({
   const [dreaming, setDreaming] = useState(false);
   const [promptText, setPromptText] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
+  const [heartbeat, setHeartbeat] = useState<HeartbeatSettings>({
+    enabled: false,
+    intervalMinutes: 30,
+  });
+  const [selectedModel, setSelectedModelState] = useState<BedrockModel>(
+    BEDROCK_MODELS[0]
+  );
+  const [spicy, setSpicy] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setView("menu");
+      getSpiceMode().then(setSpicy);
     }
   }, [visible]);
+
+  const handleOpenModel = async () => {
+    const current = await getSelectedModel();
+    setSelectedModelState(current);
+    setView("model");
+  };
+
+  const handleSelectModel = async (model: BedrockModel) => {
+    setSelectedModelState(model);
+    await setSelectedModel(model.id);
+  };
+
+  const handleOpenHeartbeat = async () => {
+    const settings = await getHeartbeatSettings();
+    setHeartbeat(settings);
+    setView("heartbeat");
+  };
+
+  const handleSaveHeartbeat = async (settings: HeartbeatSettings) => {
+    setHeartbeat(settings);
+    await setHeartbeatSettings(settings);
+  };
 
   const handleOpenPrompt = async () => {
     const current = await getCustomPrompt();
@@ -206,6 +252,55 @@ export function MenuSheet({
 
               <TouchableOpacity
                 style={styles.menuItem}
+                onPress={handleOpenHeartbeat}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="pulse-outline"
+                  size={20}
+                  color={theme.colors.accent}
+                />
+                <View style={styles.menuTextWrap}>
+                  <Text style={styles.menuLabel}>Heartbeat</Text>
+                  <Text style={styles.menuDesc}>
+                    {heartbeat.enabled
+                      ? `Every ~${heartbeat.intervalMinutes}m`
+                      : "Proactive check-ins (off)"}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color={theme.colors.textMuted}
+                />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={handleOpenModel}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="hardware-chip-outline"
+                  size={20}
+                  color={theme.colors.accent}
+                />
+                <View style={styles.menuTextWrap}>
+                  <Text style={styles.menuLabel}>Model</Text>
+                  <Text style={styles.menuDesc}>
+                    {selectedModel.label} — ${selectedModel.inputCost}/$
+                    {selectedModel.outputCost} per MTok
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color={theme.colors.textMuted}
+                />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
                 onPress={handleOpenPrompt}
                 activeOpacity={0.7}
               >
@@ -226,6 +321,27 @@ export function MenuSheet({
                   color={theme.colors.textMuted}
                 />
               </TouchableOpacity>
+
+              <View style={styles.spiceRow}>
+                <View style={styles.menuTextWrap}>
+                  <Text style={styles.menuLabel}>Spice mode</Text>
+                  <Text style={styles.menuDesc}>
+                    {spicy ? "Relationship mode on" : "Off"}
+                  </Text>
+                </View>
+                <Switch
+                  value={spicy}
+                  onValueChange={async (val) => {
+                    setSpicy(val);
+                    await setSpiceMode(val);
+                  }}
+                  trackColor={{
+                    false: theme.colors.border,
+                    true: "#e05555",
+                  }}
+                  thumbColor={theme.colors.text}
+                />
+              </View>
 
               <TouchableOpacity
                 style={[styles.menuItem, styles.logoutItem]}
@@ -252,6 +368,130 @@ export function MenuSheet({
             </>
           )}
 
+          {view === "model" && (
+            <>
+              <View style={styles.subHeader}>
+                <TouchableOpacity onPress={() => setView("menu")}>
+                  <Ionicons
+                    name="arrow-back"
+                    size={22}
+                    color={theme.colors.textDim}
+                  />
+                </TouchableOpacity>
+                <Text style={styles.title}>Model</Text>
+                <View style={{ width: 22 }} />
+              </View>
+
+              {BEDROCK_MODELS.map((model) => {
+                const active = selectedModel.id === model.id;
+                return (
+                  <TouchableOpacity
+                    key={model.id}
+                    style={[
+                      styles.menuItem,
+                      active && {
+                        borderColor: theme.colors.accent,
+                        backgroundColor: theme.colors.accentGlow,
+                      },
+                    ]}
+                    onPress={() => handleSelectModel(model)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.menuTextWrap}>
+                      <Text
+                        style={[
+                          styles.menuLabel,
+                          active && { color: theme.colors.accent },
+                        ]}
+                      >
+                        {model.label}
+                      </Text>
+                      <Text style={styles.menuDesc}>
+                        ${model.inputCost} in / ${model.outputCost} out per MTok
+                      </Text>
+                    </View>
+                    {active && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={20}
+                        color={theme.colors.accent}
+                      />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </>
+          )}
+
+          {view === "heartbeat" && (
+            <>
+              <View style={styles.subHeader}>
+                <TouchableOpacity onPress={() => setView("menu")}>
+                  <Ionicons
+                    name="arrow-back"
+                    size={22}
+                    color={theme.colors.textDim}
+                  />
+                </TouchableOpacity>
+                <Text style={styles.title}>Heartbeat</Text>
+                <View style={{ width: 22 }} />
+              </View>
+
+              <Text style={styles.promptHint}>
+                When enabled, clood periodically wakes up in the background. If
+                it has something worth saying — a meal reminder, a follow-up —
+                it sends a notification. Otherwise it stays quiet.
+              </Text>
+
+              <View style={styles.heartbeatToggleRow}>
+                <Text style={styles.heartbeatLabel}>Enable heartbeat</Text>
+                <Switch
+                  value={heartbeat.enabled}
+                  onValueChange={(enabled) =>
+                    handleSaveHeartbeat({ ...heartbeat, enabled })
+                  }
+                  trackColor={{
+                    false: theme.colors.border,
+                    true: theme.colors.accent,
+                  }}
+                  thumbColor={theme.colors.text}
+                />
+              </View>
+
+              {heartbeat.enabled && (
+                <View style={styles.heartbeatSliderWrap}>
+                  <Text style={styles.heartbeatLabel}>
+                    Interval: ~{heartbeat.intervalMinutes}m
+                  </Text>
+                  <View style={styles.heartbeatSliderRow}>
+                    <Text style={styles.heartbeatSliderLabel}>15m</Text>
+                    <Slider
+                      style={{ flex: 1, height: 40 }}
+                      minimumValue={15}
+                      maximumValue={120}
+                      step={5}
+                      value={heartbeat.intervalMinutes}
+                      onSlidingComplete={(val) =>
+                        handleSaveHeartbeat({
+                          ...heartbeat,
+                          intervalMinutes: val,
+                        })
+                      }
+                      minimumTrackTintColor={theme.colors.accent}
+                      maximumTrackTintColor={theme.colors.border}
+                      thumbTintColor={theme.colors.accent}
+                    />
+                    <Text style={styles.heartbeatSliderLabel}>2h</Text>
+                  </View>
+                  <Text style={styles.heartbeatHint}>
+                    ±20% jitter applied so it feels natural. Claude may skip
+                    heartbeats if there's nothing relevant to say.
+                  </Text>
+                </View>
+              )}
+            </>
+          )}
+
           {view === "prompt" && (
             <>
               <View style={styles.subHeader}>
@@ -269,7 +509,22 @@ export function MenuSheet({
                   />
                 </TouchableOpacity>
                 <Text style={styles.title}>System Prompt</Text>
-                <View style={{ width: 22 }} />
+                <TouchableOpacity
+                  onPress={handleSavePrompt}
+                  disabled={!promptDirty}
+                >
+                  <Text
+                    style={{
+                      fontSize: theme.font.size.sm,
+                      fontWeight: "700",
+                      color: promptDirty
+                        ? theme.colors.accent
+                        : theme.colors.textMuted,
+                    }}
+                  >
+                    Save
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               <Text style={styles.promptHint}>
@@ -291,18 +546,6 @@ export function MenuSheet({
                 autoCapitalize="sentences"
                 autoCorrect
               />
-
-              <TouchableOpacity
-                style={[
-                  styles.saveButton,
-                  !promptDirty && styles.saveButtonDisabled,
-                ]}
-                onPress={handleSavePrompt}
-                disabled={!promptDirty}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.saveButtonText}>Save</Text>
-              </TouchableOpacity>
             </>
           )}
         </Pressable>
@@ -400,5 +643,50 @@ const styles = StyleSheet.create({
   logoutItem: {
     marginTop: theme.spacing.sm,
     borderColor: theme.colors.danger + "33",
+  },
+  spiceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.bg,
+    marginBottom: theme.spacing.sm,
+  },
+  heartbeatToggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: theme.spacing.md,
+    paddingHorizontal: theme.spacing.sm,
+  },
+  heartbeatLabel: {
+    fontSize: theme.font.size.md,
+    fontWeight: "600",
+    color: theme.colors.text,
+  },
+  heartbeatSliderWrap: {
+    paddingHorizontal: theme.spacing.sm,
+    paddingTop: theme.spacing.sm,
+  },
+  heartbeatSliderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: theme.spacing.sm,
+  },
+  heartbeatSliderLabel: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    fontWeight: "600",
+    width: 24,
+  },
+  heartbeatHint: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.md,
+    lineHeight: 18,
   },
 });

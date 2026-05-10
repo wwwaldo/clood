@@ -15,9 +15,7 @@ export function ChatBubble({ role, content, isStreaming, index }: Props) {
   return (
     <Animated.View
       entering={FadeInDown.delay(Math.min(index * 30, 150))
-        .duration(300)
-        .springify()
-        .damping(18)}
+        .duration(250)}
       style={[styles.row, isUser && styles.rowUser]}
     >
       {!isUser && (

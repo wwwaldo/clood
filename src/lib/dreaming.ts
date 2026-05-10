@@ -8,6 +8,7 @@ import {
   type TopicMemory,
 } from "./memoryStorage";
 import { dateKey } from "./chatStorage";
+import { invokeChat } from "./api";
 import type { Message } from "./api";
 
 const DREAM_PROMPT = `You are processing today's conversation into long-term memories.
@@ -54,7 +55,7 @@ interface DreamResult {
  * Process today's conversation into memory topic blobs.
  * Non-streaming, single-shot API call.
  */
-export async function dream(apiKey: string): Promise<DreamResult[]> {
+export async function dream(_apiKey?: string): Promise<DreamResult[]> {
   const todayChat = await getTodayChat();
   if (todayChat.length === 0) return [];
 
@@ -67,29 +68,14 @@ export async function dream(apiKey: string): Promise<DreamResult[]> {
     formatExistingMemories(existingMemories),
   ].join("");
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      system: DREAM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
+  const text = await invokeChat(
+    [{ role: "user", content: userMessage }],
+    { system: DREAM_PROMPT }
+  );
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => null);
-    throw new Error(err?.error?.message || `Dream API error: ${response.status}`);
+  if (!text) {
+    throw new Error("Dream API returned no response");
   }
-
-  const data = await response.json();
-  const text = data.content?.[0]?.text ?? "";
 
   // Parse JSON from response (handle possible markdown fences)
   const jsonStr = text.replace(/```json?\n?/g, "").replace(/```/g, "").trim();

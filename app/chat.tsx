@@ -15,15 +15,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { theme } from "../src/lib/theme";
-import { getApiKey, deleteApiKey, getCustomPrompt } from "../src/lib/storage";
+import { getApiKey, deleteProviderConfig, getCustomPrompt } from "../src/lib/storage";
 import { streamChat, type Message, type ToolUseRequest } from "../src/lib/api";
 import { enrichMessages } from "../src/lib/enrichment";
 import { getSystemPrompt } from "../src/lib/mood";
 import {
-  scheduleDailyNotification,
   sendTestNotification,
-  scheduleCheckIns,
-  type ScheduledCheckIn,
 } from "../src/lib/notifications";
 import {
   saveChat,
@@ -78,7 +75,6 @@ export default function ChatScreen() {
         return;
       }
       setApiKeyState(key);
-      scheduleDailyNotification();
 
       const todayMessages = await getTodayChat();
       if (todayMessages.length > 0) {
@@ -91,7 +87,7 @@ export default function ChatScreen() {
       // Run dreaming if overdue (past 11pm or next day)
       if (await shouldDream()) {
         try {
-          await dream(key);
+          await dream();
           console.log("[dreaming] completed");
         } catch (e) {
           console.error("[dreaming] failed:", e);
@@ -265,27 +261,6 @@ export default function ChatScreen() {
             tool_use_id: req.toolId,
             content,
           });
-        } else if (req.toolName === "schedule_checkins") {
-          const checkins = req.input.checkins as {
-            hour: number;
-            minute: number;
-            reason: string;
-          }[];
-          let content: string;
-          try {
-            const result = await scheduleCheckIns(checkins);
-            content = `Scheduled ${result.scheduled} check-in(s). At each time, you'll be woken up to generate a fresh message.`;
-            if (result.skipped > 0) {
-              content += ` ${result.skipped} skipped (time already passed).`;
-            }
-          } catch (e: any) {
-            content = `Failed to schedule check-ins: ${e.message}`;
-          }
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: req.toolId,
-            content,
-          });
         }
       }
 
@@ -447,7 +422,7 @@ export default function ChatScreen() {
     const doLogout = async () => {
       if (isStreaming) handleStop();
       if (messages.length > 0) await saveChat(messages);
-      await deleteApiKey();
+      await deleteProviderConfig();
       router.replace("/");
     };
 
@@ -527,10 +502,15 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
         <View style={styles.headerCenter}>
-          <View style={styles.headerTitleRow}>
-            <Text style={styles.headerTitle}>clood</Text>
-            <View style={styles.headerDot} />
-          </View>
+          <TouchableOpacity
+            onPress={() => router.push("/avatar")}
+            activeOpacity={0.8}
+          >
+            <View style={styles.headerTitleRow}>
+              <Text style={styles.headerTitle}>clood</Text>
+              <View style={styles.headerDot} />
+            </View>
+          </TouchableOpacity>
           <MoodPill />
         </View>
         <TouchableOpacity
@@ -557,7 +537,7 @@ export default function ChatScreen() {
         ]}
         ListEmptyComponent={renderEmpty}
         onContentSizeChange={scrollToEnd}
-        keyboardDismissMode="interactive"
+        keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
       />
 
@@ -574,7 +554,7 @@ export default function ChatScreen() {
         onClose={() => setMenuOpen(false)}
         onDream={async () => {
           try {
-            const results = await dream(apiKey);
+            const results = await dream();
             const mems = await getAllMemories();
             setMemories(mems);
             Alert.alert("Dream complete", `Processed ${results.length} topics`);
