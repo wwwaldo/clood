@@ -69,6 +69,7 @@ async function generateHeartbeatMessage(): Promise<string | null> {
   const mood = getCurrentMood();
   const mealPlan = await getTodayMealPlan();
   const memories = await getAllMemories();
+  const todayChat = await getTodayChat();
 
   const now = new Date();
   const h = now.getHours() % 12 || 12;
@@ -84,9 +85,17 @@ async function generateHeartbeatMessage(): Promise<string | null> {
   ].join(", ");
 
   const topMemories = memories
-    .slice(0, 3)
-    .map((m) => `${m.topic}: ${m.content.slice(0, 100)}`)
+    .slice(0, 5)
+    .map((m) => `${m.topic}: ${m.content.slice(0, 150)}`)
     .join("\n");
+
+  // Include today's conversation (last 20 messages to stay within token budget)
+  const recentChat = todayChat.slice(-20);
+  const chatContext = recentChat.length > 0
+    ? recentChat
+        .map((m) => `${m.role === "user" ? "User" : "Clood"}: ${m.content.slice(0, 200)}`)
+        .join("\n")
+    : "No conversation yet today.";
 
   const userMessage = [
     `It's ${dayNames[now.getDay()]}, ${h}:${min} ${ampm}. Your mood is: ${mood.label}.`,
@@ -95,7 +104,9 @@ async function generateHeartbeatMessage(): Promise<string | null> {
     "",
     topMemories ? `Memories:\n${topMemories}` : "No memories yet.",
     "",
-    "Should you reach out? If yes, write a short notification message. If not, respond with SKIP.",
+    `Today's conversation so far:\n${chatContext}`,
+    "",
+    "Based on the conversation today and the current time, should you reach out? If yes, write a short notification message that feels like a natural continuation of your day together. If not, respond with SKIP.",
   ].join("\n");
 
   try {
