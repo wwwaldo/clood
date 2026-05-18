@@ -1,61 +1,81 @@
 import * as TaskManager from "expo-task-manager";
 import * as BackgroundFetch from "expo-background-fetch";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
-import { getApiKey } from "./storage";
 import { getAllMemories } from "./memoryStorage";
 import { getCurrentMood } from "./mood";
 import { getTodayMealPlan } from "./mealPlan";
 import { saveChat, getTodayChat, dateKey } from "./chatStorage";
-import {
-  getDueCheckIns,
-  markCheckInFired,
-  fireCheckInNotification,
-} from "./notifications";
+import { fireCheckInNotification } from "./notifications";
+import { invokeChat } from "./api";
 import type { Message } from "./api";
 
-export const CHECKIN_TASK_NAME = "clood-checkin-task";
+export const HEARTBEAT_TASK_NAME = "clood-heartbeat-task";
 
-const CHECKIN_SYSTEM_PROMPT = `You are clood, a personal AI assistant. You are generating a brief proactive check-in notification for the user's phone.
+const HEARTBEAT_SETTINGS_KEY = "clood_heartbeat_settings";
+const HEARTBEAT_LAST_FIRE_KEY = "clood_heartbeat_last_fire";
+
+export interface HeartbeatSettings {
+  enabled: boolean;
+  intervalMinutes: number; // 15–120
+}
+
+const DEFAULT_SETTINGS: HeartbeatSettings = {
+  enabled: false,
+  intervalMinutes: 30,
+};
+
+// --- Settings persistence ---
+
+export async function getHeartbeatSettings(): Promise<HeartbeatSettings> {
+  const raw = await AsyncStorage.getItem(HEARTBEAT_SETTINGS_KEY);
+  if (!raw) return DEFAULT_SETTINGS;
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+export async function setHeartbeatSettings(
+  settings: HeartbeatSettings
+): Promise<void> {
+  await AsyncStorage.setItem(
+    HEARTBEAT_SETTINGS_KEY,
+    JSON.stringify(settings)
+  );
+  // Re-register task with new interval
+  if (settings.enabled) {
+    await registerHeartbeatTask(settings.intervalMinutes);
+  } else {
+    await unregisterHeartbeatTask();
+  }
+}
+
+// --- Heartbeat prompt ---
+
+const HEARTBEAT_SYSTEM_PROMPT = `You are clood, a personal AI assistant. You might want to send a proactive push notification to the user's phone.
 
 Rules:
-- Write 1-2 short sentences max — this appears as a push notification
-- Be warm and natural, not robotic
-- Reference the specific context given (meal plan, time of day, reason for check-in)
-- Don't use greetings like "Hey!" every time — vary your openings
-- Don't mention that you're a notification or that you were scheduled`;
+- Look at the time, meal plan, and memories. Decide if there's something worth saying RIGHT NOW.
+- If yes: write 1-2 short sentences max. Be warm, natural, not robotic. Vary your openings.
+- If no: respond with exactly "SKIP" (nothing else). It's fine to skip — don't force it.
+- Good reasons to message: upcoming meal reminder, time-relevant encouragement, following up on something from memories
+- Bad reasons: generic "how's it going", nothing contextually relevant, it's late at night
+- Don't mention that you're a notification, a heartbeat, or that you're automated
+- Between 10pm and 7am, always SKIP unless something is truly urgent`;
 
-function buildCheckInPrompt(
-  reason: string,
-  mealPlanContext: string,
-  memoriesContext: string,
-  mood: string
-): string {
+async function generateHeartbeatMessage(): Promise<string | null> {
+  const mood = getCurrentMood();
+  const mealPlan = await getTodayMealPlan();
+  const memories = await getAllMemories();
+  const todayChat = await getTodayChat();
+
   const now = new Date();
   const h = now.getHours() % 12 || 12;
   const min = String(now.getMinutes()).padStart(2, "0");
   const ampm = now.getHours() >= 12 ? "PM" : "AM";
-  const timeStr = `${h}:${min} ${ampm}`;
-
-  return [
-    `It's ${timeStr}. Your current mood is: ${mood}.`,
-    `You scheduled this check-in because: "${reason}"`,
-    "",
-    mealPlanContext ? `Today's meal plan context:\n${mealPlanContext}` : "",
-    memoriesContext ? `Relevant memories:\n${memoriesContext}` : "",
-    "",
-    "Generate a short, warm check-in message for the notification.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-async function generateCheckInMessage(reason: string): Promise<string | null> {
-  const apiKey = await getApiKey();
-  if (!apiKey) return null;
-
-  const mood = getCurrentMood();
-  const mealPlan = await getTodayMealPlan();
-  const memories = await getAllMemories();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
   const mealContext = [
     `Breakfast: ${mealPlan.meals.breakfast.name}`,
@@ -65,47 +85,47 @@ async function generateCheckInMessage(reason: string): Promise<string | null> {
   ].join(", ");
 
   const topMemories = memories
-    .slice(0, 3)
-    .map((m) => `${m.topic}: ${m.content.slice(0, 100)}`)
+    .slice(0, 5)
+    .map((m) => `${m.topic}: ${m.content.slice(0, 150)}`)
     .join("\n");
 
-  const userMessage = buildCheckInPrompt(
-    reason,
-    mealContext,
-    topMemories,
-    mood.label
-  );
+  // Include today's conversation (last 20 messages to stay within token budget)
+  const recentChat = todayChat.slice(-20);
+  const chatContext = recentChat.length > 0
+    ? recentChat
+        .map((m) => `${m.role === "user" ? "User" : "Clood"}: ${m.content.slice(0, 200)}`)
+        .join("\n")
+    : "No conversation yet today.";
+
+  const userMessage = [
+    `It's ${dayNames[now.getDay()]}, ${h}:${min} ${ampm}. Your mood is: ${mood.label}.`,
+    "",
+    `Today's meals: ${mealContext}`,
+    "",
+    topMemories ? `Memories:\n${topMemories}` : "No memories yet.",
+    "",
+    `Today's conversation so far:\n${chatContext}`,
+    "",
+    "Based on the conversation today and the current time, should you reach out? If yes, write a short notification message that feels like a natural continuation of your day together. If not, respond with SKIP.",
+  ].join("\n");
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 150,
-        system: CHECKIN_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
-    });
+    const text = await invokeChat(
+      [{ role: "user", content: userMessage }],
+      { system: HEARTBEAT_SYSTEM_PROMPT, maxTokens: 100 }
+    );
 
-    if (!response.ok) return null;
-
-    const data = await response.json();
-    return data.content?.[0]?.text ?? null;
+    if (!text || text.trim() === "SKIP") return null;
+    return text.trim();
   } catch {
     return null;
   }
 }
 
-async function saveCheckInToChat(message: string): Promise<void> {
+async function saveHeartbeatToChat(message: string): Promise<void> {
   const existing = await getTodayChat();
   const newMsg: Message = {
-    id: `checkin-${Date.now()}`,
+    id: `heartbeat-${Date.now()}`,
     role: "assistant",
     content: message,
     timestamp: Date.now(),
@@ -113,45 +133,90 @@ async function saveCheckInToChat(message: string): Promise<void> {
   await saveChat([...existing, newMsg], dateKey());
 }
 
-// Define the background task
-TaskManager.defineTask(CHECKIN_TASK_NAME, async () => {
-  try {
-    const dueCheckIns = await getDueCheckIns();
+// --- Jitter ---
 
-    if (dueCheckIns.length === 0) {
+function shouldFireNow(intervalMinutes: number): boolean {
+  // Add ±20% jitter to the interval
+  const jitter = intervalMinutes * 0.2;
+  const minInterval = (intervalMinutes - jitter) * 60 * 1000;
+  // Random point within the jitter window
+  const actualInterval = minInterval + Math.random() * jitter * 2 * 60 * 1000;
+  // We use a stored "last fire" timestamp to decide
+  // The background fetch runs at its own cadence, so we gate on elapsed time
+  return true; // actual gating happens in the task via last-fire check
+}
+
+// --- Background task ---
+
+TaskManager.defineTask(HEARTBEAT_TASK_NAME, async () => {
+  try {
+    const settings = await getHeartbeatSettings();
+    if (!settings.enabled) {
       return BackgroundFetch.BackgroundFetchResult.NoData;
     }
 
-    for (const ci of dueCheckIns) {
-      const message = await generateCheckInMessage(ci.reason);
-      if (message) {
-        await fireCheckInNotification(message);
-        await saveCheckInToChat(message);
-      }
-      await markCheckInFired(ci.hour, ci.minute);
+    // Check if enough time has elapsed since last fire (with jitter)
+    const lastFireRaw = await AsyncStorage.getItem(HEARTBEAT_LAST_FIRE_KEY);
+    const lastFire = lastFireRaw ? parseInt(lastFireRaw, 10) : 0;
+    const now = Date.now();
+    const jitterFactor = 0.8 + Math.random() * 0.4; // 0.8–1.2x
+    const intervalMs = settings.intervalMinutes * 60 * 1000 * jitterFactor;
+
+    if (now - lastFire < intervalMs) {
+      return BackgroundFetch.BackgroundFetchResult.NoData;
     }
 
-    return BackgroundFetch.BackgroundFetchResult.NewData;
+    // Record this fire
+    await AsyncStorage.setItem(HEARTBEAT_LAST_FIRE_KEY, String(now));
+
+    const message = await generateHeartbeatMessage();
+    if (message) {
+      await fireCheckInNotification(message);
+      await saveHeartbeatToChat(message);
+      return BackgroundFetch.BackgroundFetchResult.NewData;
+    }
+
+    return BackgroundFetch.BackgroundFetchResult.NoData;
   } catch (e) {
-    console.error("[checkin-task] error:", e);
+    console.error("[heartbeat] error:", e);
     return BackgroundFetch.BackgroundFetchResult.Failed;
   }
 });
 
-/**
- * Register the background fetch task. Call once on app startup.
- */
-export async function registerCheckInTask(): Promise<void> {
+// --- Registration ---
+
+export async function registerHeartbeatTask(
+  intervalMinutes?: number
+): Promise<void> {
   if (Platform.OS === "web") return;
 
-  const isRegistered = await TaskManager.isTaskRegisteredAsync(
-    CHECKIN_TASK_NAME
-  );
-  if (isRegistered) return;
+  const settings = await getHeartbeatSettings();
+  if (!settings.enabled && !intervalMinutes) return;
 
-  await BackgroundFetch.registerTaskAsync(CHECKIN_TASK_NAME, {
-    minimumInterval: 10 * 60, // check every ~10 minutes
+  const interval = intervalMinutes ?? settings.intervalMinutes;
+
+  // Unregister first to update interval
+  const isRegistered = await TaskManager.isTaskRegisteredAsync(
+    HEARTBEAT_TASK_NAME
+  );
+  if (isRegistered) {
+    await BackgroundFetch.unregisterTaskAsync(HEARTBEAT_TASK_NAME);
+  }
+
+  await BackgroundFetch.registerTaskAsync(HEARTBEAT_TASK_NAME, {
+    minimumInterval: Math.max(interval * 60, 15 * 60), // iOS minimum is 15 min
     stopOnTerminate: false,
     startOnBoot: true,
   });
+}
+
+export async function unregisterHeartbeatTask(): Promise<void> {
+  if (Platform.OS === "web") return;
+
+  const isRegistered = await TaskManager.isTaskRegisteredAsync(
+    HEARTBEAT_TASK_NAME
+  );
+  if (isRegistered) {
+    await BackgroundFetch.unregisterTaskAsync(HEARTBEAT_TASK_NAME);
+  }
 }

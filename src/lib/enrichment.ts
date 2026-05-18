@@ -26,14 +26,27 @@ function formatTimestamp(ts: number): string {
  * Transforms UI messages into API-ready messages.
  * User messages get a human-readable timestamp prepended so Claude
  * is aware of when each message was sent. Assistant messages pass through unchanged.
+ * Consecutive same-role messages are merged (can happen when heartbeats fire
+ * back-to-back without a user message in between).
  * The UI never sees the enriched content — this runs only at the API boundary.
  */
 export function enrichMessages(messages: Message[]): ApiMessage[] {
-  return messages.map((msg) => {
-    if (msg.role === "assistant") {
-      return { role: msg.role, content: msg.content };
+  const enriched: ApiMessage[] = [];
+
+  for (const msg of messages) {
+    const content =
+      msg.role === "user"
+        ? `[${formatTimestamp(msg.timestamp)}] ${msg.content}`
+        : msg.content;
+
+    const prev = enriched[enriched.length - 1];
+    if (prev && prev.role === msg.role) {
+      // Merge consecutive same-role messages
+      prev.content += "\n\n" + content;
+    } else {
+      enriched.push({ role: msg.role, content });
     }
-    const time = formatTimestamp(msg.timestamp);
-    return { role: msg.role, content: `[${time}] ${msg.content}` };
-  });
+  }
+
+  return enriched;
 }

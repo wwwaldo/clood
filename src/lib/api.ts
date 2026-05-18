@@ -1,4 +1,6 @@
 import { fetch as expoFetch } from "expo/fetch";
+import { AwsClient } from "aws4fetch";
+import { getProviderConfig, getSelectedModel, type ProviderConfig } from "./storage";
 
 export interface Message {
   id: string;
@@ -16,6 +18,8 @@ export interface ToolUseRequest {
 export type StreamResult =
   | { type: "done" }
   | { type: "tool_use"; requests: ToolUseRequest[] };
+
+const BEDROCK_REGION = "us-east-1";
 
 const TOOLS = [
   {
@@ -131,83 +135,143 @@ const TOOLS = [
       required: ["eventId"],
     },
   },
-  {
-    name: "schedule_checkins",
-    description:
-      "Schedule up to 3 times today when you want to proactively reach out to the user. At each time, you'll be woken up in the background to generate a fresh, context-aware message based on the time, meal plan, memories, and your reason. The message appears as a push notification and is saved to the chat. Past times are skipped. Previous check-ins are replaced.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        checkins: {
-          type: "array" as const,
-          description: "Array of check-ins to schedule (max 3)",
-          items: {
-            type: "object" as const,
-            properties: {
-              hour: {
-                type: "number" as const,
-                description: "Hour in 24h format (0-23)",
-              },
-              minute: {
-                type: "number" as const,
-                description: "Minute (0-59)",
-              },
-              reason: {
-                type: "string" as const,
-                description: "Why you want to check in — context for your future self when generating the message (e.g. 'remind about lunch', 'ask how the meeting went')",
-              },
-            },
-            required: ["hour", "minute", "reason"],
-          },
-        },
-      },
-      required: ["checkins"],
-    },
-  },
 ];
 
-/**
- * Stream a chat response. Returns a StreamResult indicating whether the response
- * completed normally or is requesting tool use (which the caller must handle).
- */
-export async function streamChat(
+// --- Provider fetch ---
+
+const ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+
+async function anthropicFetch(
   apiKey: string,
+  body: string,
+  streaming: boolean
+): Promise<Response> {
+  const fetchFn = streaming ? expoFetch : fetch;
+  return fetchFn("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body,
+  });
+}
+
+async function bedrockFetch(
+  config: ProviderConfig,
+  body: string,
+  streaming: boolean,
+  modelId: string
+): Promise<Response> {
+  const aws = new AwsClient({
+    accessKeyId: config.awsAccessKey!,
+    secretAccessKey: config.awsSecretKey!,
+    region: BEDROCK_REGION,
+    service: "bedrock",
+  });
+
+  const encodedModel = encodeURIComponent(modelId);
+  const endpoint = streaming
+    ? `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com/model/${encodedModel}/invoke-with-response-stream`
+    : `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com/model/${encodedModel}/invoke`;
+
+  return aws.fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+}
+
+function buildRequestBody(
   messages: { role: string; content: unknown }[],
-  onChunk: (text: string) => void,
-  onError: (error: string) => void,
-  signal?: AbortSignal,
-  system?: string
-): Promise<StreamResult> {
-  try {
-    const body: Record<string, unknown> = {
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      stream: true,
-      messages,
-      tools: TOOLS,
-    };
-    if (system) body.system = system;
+  options: {
+    maxTokens?: number;
+    stream?: boolean;
+    system?: string;
+    tools?: boolean;
+  }
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: options.maxTokens ?? 4096,
+  };
+  if (options.stream) body.stream = true;
 
-    const response = await expoFetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
+  // System prompt with cache control — cached after first request
+  if (options.system) {
+    body.system = [
+      {
+        type: "text",
+        text: options.system,
+        cache_control: { type: "ephemeral" },
       },
-      body: JSON.stringify(body),
-      signal,
-    });
+    ];
+  }
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => null);
-      throw new Error(err?.error?.message || `API error: ${response.status}`);
+  // Tools with cache control
+  if (options.tools) {
+    const toolsWithCache = TOOLS.map((tool, i) =>
+      i === TOOLS.length - 1
+        ? { ...tool, cache_control: { type: "ephemeral" } }
+        : tool
+    );
+    body.tools = toolsWithCache;
+  }
+
+  // Messages — add cache breakpoint on the second-to-last user turn
+  // so the conversation history up to that point is cached
+  const msgs = messages.map((msg, i) => {
+    // Find the second-to-last user message for cache breakpoint
+    const isSecondToLastUser =
+      msg.role === "user" &&
+      i < messages.length - 1 &&
+      messages.slice(i + 1).filter((m) => m.role === "user").length === 1;
+
+    if (isSecondToLastUser && typeof msg.content === "string") {
+      return {
+        role: msg.role,
+        content: [
+          {
+            type: "text",
+            text: msg.content,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      };
     }
+    return msg;
+  });
+  body.messages = msgs;
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response stream");
+  return body;
+}
 
+async function providerFetch(
+  body: Record<string, unknown>,
+  streaming: boolean
+): Promise<Response> {
+  const config = await getProviderConfig();
+  if (!config) throw new Error("No API credentials configured");
+
+  if (config.provider === "anthropic") {
+    const { anthropic_version: _, ...rest } = body;
+    const anthropicBody = { ...rest, model: ANTHROPIC_MODEL };
+    return anthropicFetch(config.apiKey!, JSON.stringify(anthropicBody), streaming);
+  }
+
+  const model = await getSelectedModel();
+  return bedrockFetch(config, JSON.stringify(body), streaming, model.id);
+}
+
+// --- SSE stream parsing (same format for both providers) ---
+
+function parseSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onChunk: (text: string) => void
+): Promise<ToolUseRequest[]> {
+  return new Promise(async (resolve) => {
     const decoder = new TextDecoder();
     let buffer = "";
     const toolUseRequests: ToolUseRequest[] = [];
@@ -238,8 +302,10 @@ export async function streamChat(
             onChunk(event.delta.text);
           }
 
-          // Track tool use blocks
-          if (event.type === "content_block_start" && event.content_block?.type === "tool_use") {
+          if (
+            event.type === "content_block_start" &&
+            event.content_block?.type === "tool_use"
+          ) {
             currentToolId = event.content_block.id;
             currentToolName = event.content_block.name;
             currentToolInput = "";
@@ -275,6 +341,41 @@ export async function streamChat(
       }
     }
 
+    resolve(toolUseRequests);
+  });
+}
+
+// --- Public API ---
+
+export async function streamChat(
+  _apiKey: string, // kept for backward compat, ignored — reads from storage
+  messages: { role: string; content: unknown }[],
+  onChunk: (text: string) => void,
+  onError: (error: string) => void,
+  signal?: AbortSignal,
+  system?: string
+): Promise<StreamResult> {
+  try {
+    const body = buildRequestBody(messages, {
+      stream: true,
+      system,
+      tools: true,
+    });
+
+    const response = await providerFetch(body, true);
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(
+        err?.error?.message || err?.message || `API error: ${response.status}`
+      );
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response stream");
+
+    const toolUseRequests = await parseSSEStream(reader, onChunk);
+
     if (toolUseRequests.length > 0) {
       return { type: "tool_use", requests: toolUseRequests };
     }
@@ -287,7 +388,30 @@ export async function streamChat(
   }
 }
 
-export async function validateApiKey(apiKey: string): Promise<boolean> {
+/**
+ * Non-streaming call. Used by dreaming and heartbeat.
+ */
+export async function invokeChat(
+  messages: { role: string; content: unknown }[],
+  options?: { system?: string; maxTokens?: number }
+): Promise<string | null> {
+  try {
+    const body = buildRequestBody(messages, {
+      maxTokens: options?.maxTokens ?? 4096,
+      system: options?.system,
+    });
+
+    const response = await providerFetch(body, false);
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    return data.content?.[0]?.text ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function validateAnthropicKey(apiKey: string): Promise<boolean> {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -298,7 +422,7 @@ export async function validateApiKey(apiKey: string): Promise<boolean> {
         "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: ANTHROPIC_MODEL,
         max_tokens: 1,
         messages: [{ role: "user", content: "hi" }],
       }),
@@ -306,5 +430,42 @@ export async function validateApiKey(apiKey: string): Promise<boolean> {
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+export async function validateBedrockCredentials(
+  accessKey: string,
+  secretKey: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const aws = new AwsClient({
+      accessKeyId: accessKey,
+      secretAccessKey: secretKey,
+      region: BEDROCK_REGION,
+      service: "bedrock",
+    });
+
+    // Validate with Nova Micro — always available, no use case form needed
+    const body = JSON.stringify({
+      messages: [{ role: "user", content: [{ text: "hi" }] }],
+      inferenceConfig: { maxTokens: 1 },
+    });
+
+    const response = await aws.fetch(
+      `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com/model/us.amazon.nova-micro-v1%3A0/invoke`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      }
+    );
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      return { ok: false, error: `HTTP ${response.status}: ${errBody.slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message || String(e) };
   }
 }
