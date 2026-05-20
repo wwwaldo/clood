@@ -81,3 +81,39 @@ brew unlink ruby
 npx expo run:ios --device
 ```
 
+## Deploying
+
+Builds and store submissions go through EAS. The project is already linked (`extra.eas.projectId` in `app.json`); bundle/package ID is `com.waldoexpo.clood` on both platforms.
+
+### One-time setup
+```bash
+npm install -g eas-cli
+eas login
+```
+
+### Build profiles (`eas.json`)
+- `development` — dev client, internal distribution. Use when iterating with native modules.
+- `preview` — internal distribution release build. Use for TestFlight-style sharing without going through review.
+- `production` — store build. `autoIncrement` bumps the build number each run.
+
+### Build
+```bash
+eas build --profile development --platform ios     # or android / all
+eas build --profile preview     --platform all
+eas build --profile production  --platform all
+```
+
+Install internal builds via the link EAS prints, or scan the QR with the Expo Orbit / Expo Go dev menu.
+
+### Submit to stores
+```bash
+eas submit --profile production --platform ios       # App Store Connect
+eas submit --profile production --platform android   # Google Play
+```
+
+First submission per platform will prompt for credentials (App Store Connect API key, Play service account JSON). EAS caches them after that.
+
+### Version bumps
+- Marketing version (`1.x.y`) lives in `app.json` → `expo.version`. Bump manually.
+- Build number is remote-managed (`cli.appVersionSource: "remote"`) and auto-incremented by the `production` profile.
+
