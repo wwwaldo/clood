@@ -41,6 +41,14 @@ import {
   getDayPlan,
   getAllDayPlans,
   formatMealPlanForTool,
+  getAllAvailableMeals,
+  getCustomMeals,
+  saveCustomMeal,
+  updateCustomMeal,
+  deleteCustomMeal,
+  type MealInput,
+  type MealPatch,
+  type GroceryStore,
 } from "../src/lib/mealPlan";
 import {
   getEvents,
@@ -255,6 +263,89 @@ export default function ChatScreen() {
             content = `Event ${eventId} deleted successfully.`;
           } catch (e: any) {
             content = `Failed to delete event: ${e.message}`;
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "list_meals") {
+          const filter = (req.input.filter as string | undefined) ?? "all";
+          const meals =
+            filter === "custom" ? await getCustomMeals() : await getAllAvailableMeals();
+          const content = meals.length
+            ? meals
+                .map(
+                  (m) =>
+                    `- ${m.id} [${m.source}] ${m.name} — ${m.calories}cal, ${m.protein}g protein, ${m.store}`
+                )
+                .join("\n")
+            : "No meals found.";
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "create_meal") {
+          let content: string;
+          try {
+            const input: MealInput = {
+              name: req.input.name as string,
+              description: (req.input.description as string) ?? "",
+              calories: (req.input.calories as number) ?? 0,
+              protein: (req.input.protein as number) ?? 0,
+              store: (req.input.store as GroceryStore) ?? "Loblaws",
+              ingredients: (req.input.ingredients as string[]) ?? [],
+              steps: (req.input.steps as string[]) ?? [],
+              carbs: req.input.carbs as number | undefined,
+              fat: req.input.fat as number | undefined,
+              fiber: req.input.fiber as number | undefined,
+              prepMinutes: req.input.prepMinutes as number | undefined,
+              cookMinutes: req.input.cookMinutes as number | undefined,
+              servings: req.input.servings as number | undefined,
+              tags: req.input.tags as string[] | undefined,
+            };
+            const meal = await saveCustomMeal(input);
+            content = `Created meal "${meal.name}" with id ${meal.id}.`;
+          } catch (e: any) {
+            content = `Failed to create meal: ${e?.message ?? "unknown error"}`;
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "update_meal") {
+          const id = req.input.id as string;
+          const { id: _id, ...rest } = req.input as Record<string, unknown>;
+          const patch = rest as MealPatch;
+          let content: string;
+          try {
+            const updated = await updateCustomMeal(id, patch);
+            content = updated
+              ? `Updated meal "${updated.name}" (${id}).`
+              : `No custom meal found with id ${id}. Use list_meals first.`;
+          } catch (e: any) {
+            content = `Failed to update meal: ${e?.message ?? "unknown error"}`;
+          }
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: req.toolId,
+            content,
+          });
+        } else if (req.toolName === "delete_meal") {
+          const id = req.input.id as string;
+          let content: string;
+          try {
+            const customs = await getCustomMeals();
+            if (!customs.some((m) => m.id === id)) {
+              content = `No custom meal with id ${id}. Only custom meals can be deleted.`;
+            } else {
+              await deleteCustomMeal(id);
+              content = `Deleted meal ${id}.`;
+            }
+          } catch (e: any) {
+            content = `Failed to delete meal: ${e?.message ?? "unknown error"}`;
           }
           toolResults.push({
             type: "tool_result",

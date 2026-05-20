@@ -135,6 +135,101 @@ const TOOLS = [
       required: ["eventId"],
     },
   },
+  {
+    name: "list_meals",
+    description:
+      "List meals available to the user — library presets and the user's custom meals. Use to discover meal IDs before calling update_meal or delete_meal. Optionally filter to just custom meals (the only ones that can be edited).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        filter: {
+          type: "string" as const,
+          enum: ["all", "custom"],
+          description: "'all' for everything, 'custom' for only user-created meals. Defaults to 'all'.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "create_meal",
+    description:
+      "Create a new custom meal in the user's library. Use when the user wants to add a meal or when you need a custom variant of a preset (e.g. a no-cilantro version). The meal becomes available for the user to assign to a day slot from the cookbook.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string" as const, description: "Meal name" },
+        description: { type: "string" as const, description: "One-line description" },
+        calories: { type: "number" as const, description: "Calories per serving" },
+        protein: { type: "number" as const, description: "Protein in grams" },
+        store: {
+          type: "string" as const,
+          enum: ["Loblaws", "Metro", "T&T"],
+          description: "Primary grocery store",
+        },
+        ingredients: {
+          type: "array" as const,
+          items: { type: "string" as const },
+          description: "Ingredient lines, e.g. '1 cup plain Greek yogurt'",
+        },
+        steps: {
+          type: "array" as const,
+          items: { type: "string" as const },
+          description: "Numbered recipe steps",
+        },
+        carbs: { type: "number" as const, description: "Optional: carbs in grams" },
+        fat: { type: "number" as const, description: "Optional: fat in grams" },
+        fiber: { type: "number" as const, description: "Optional: fiber in grams" },
+        prepMinutes: { type: "number" as const, description: "Optional: prep time in minutes" },
+        cookMinutes: { type: "number" as const, description: "Optional: cook time in minutes" },
+        servings: { type: "number" as const, description: "Optional: number of servings the recipe makes" },
+        tags: {
+          type: "array" as const,
+          items: { type: "string" as const },
+          description: "Optional: free-form tags, e.g. ['vegetarian', 'quick']",
+        },
+      },
+      required: ["name", "description", "calories", "protein", "store", "ingredients", "steps"],
+    },
+  },
+  {
+    name: "update_meal",
+    description:
+      "Update fields on an existing custom meal. Only custom meals can be edited — library presets are read-only. Use list_meals to find the id first. Only include fields you want to change.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string" as const, description: "The custom meal ID (starts with 'custom-')" },
+        name: { type: "string" as const },
+        description: { type: "string" as const },
+        calories: { type: "number" as const },
+        protein: { type: "number" as const },
+        store: { type: "string" as const, enum: ["Loblaws", "Metro", "T&T"] },
+        ingredients: { type: "array" as const, items: { type: "string" as const } },
+        steps: { type: "array" as const, items: { type: "string" as const } },
+        carbs: { type: "number" as const },
+        fat: { type: "number" as const },
+        fiber: { type: "number" as const },
+        prepMinutes: { type: "number" as const },
+        cookMinutes: { type: "number" as const },
+        servings: { type: "number" as const },
+        tags: { type: "array" as const, items: { type: "string" as const } },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "delete_meal",
+    description:
+      "Delete a custom meal. Library presets cannot be deleted. Use list_meals to find the id first.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string" as const, description: "The custom meal ID (starts with 'custom-')" },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 // --- Provider fetch ---
