@@ -23,12 +23,10 @@ import {
   getTodayMealPlan,
   getAllAvailableMeals,
   setMealSlot,
-  saveCustomMeal,
-  GROCERY_STORES,
+  useMealsVersion,
   type DayPlan,
   type Meal,
   type MealSlot,
-  type GroceryStore,
 } from "../src/lib/mealPlan";
 
 const MEAL_TYPES: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"];
@@ -181,29 +179,27 @@ function SwapModal({
   dayLabel,
   onSelect,
   onClose,
+  onEditMeal,
+  onCreateMeal,
 }: {
   visible: boolean;
   slot: MealSlot;
   dayLabel: string;
   onSelect: (mealId: string) => void;
   onClose: () => void;
+  onEditMeal: (id: string) => void;
+  onCreateMeal: () => void;
 }) {
   const [meals, setMeals] = useState<Meal[]>([]);
   const [search, setSearch] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [formName, setFormName] = useState("");
-  const [formDesc, setFormDesc] = useState("");
-  const [formCal, setFormCal] = useState("");
-  const [formProtein, setFormProtein] = useState("");
-  const [formStore, setFormStore] = useState<GroceryStore>("Loblaws");
+  const mealsVersion = useMealsVersion();
 
   useEffect(() => {
     if (visible) {
       getAllAvailableMeals().then(setMeals);
       setSearch("");
-      setShowForm(false);
     }
-  }, [visible]);
+  }, [visible, mealsVersion]);
 
   const filtered = search.trim()
     ? meals.filter(
@@ -212,25 +208,6 @@ function SwapModal({
           m.description.toLowerCase().includes(search.toLowerCase())
       )
     : meals;
-
-  const handleCreateMeal = async () => {
-    if (!formName.trim()) return;
-    const meal = await saveCustomMeal({
-      name: formName.trim(),
-      description: formDesc.trim(),
-      calories: parseInt(formCal) || 0,
-      protein: parseInt(formProtein) || 0,
-      ingredients: [],
-      steps: [],
-      store: formStore,
-    });
-    onSelect(meal.id);
-    setShowForm(false);
-    setFormName("");
-    setFormDesc("");
-    setFormCal("");
-    setFormProtein("");
-  };
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -241,126 +218,55 @@ function SwapModal({
         >
           <Pressable style={styles.swapSheet} onPress={(e) => e.stopPropagation()}>
             <View style={styles.swapHeader}>
-              <Text style={styles.swapTitle}>
-                {showForm ? "New meal" : `Swap ${slot} — ${dayLabel}`}
-              </Text>
-              <TouchableOpacity onPress={showForm ? () => setShowForm(false) : onClose}>
-                <Ionicons
-                  name={showForm ? "arrow-back" : "close"}
-                  size={22}
-                  color={theme.colors.textDim}
-                />
+              <Text style={styles.swapTitle}>{`Swap ${slot} — ${dayLabel}`}</Text>
+              <TouchableOpacity onPress={onClose}>
+                <Ionicons name="close" size={22} color={theme.colors.textDim} />
               </TouchableOpacity>
             </View>
 
-            {showForm ? (
-              <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Meal name"
-                  placeholderTextColor={theme.colors.textMuted}
-                  value={formName}
-                  onChangeText={setFormName}
-                />
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Description"
-                  placeholderTextColor={theme.colors.textMuted}
-                  value={formDesc}
-                  onChangeText={setFormDesc}
-                />
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  <TextInput
-                    style={[styles.formInput, { flex: 1 }]}
-                    placeholder="Calories"
-                    placeholderTextColor={theme.colors.textMuted}
-                    value={formCal}
-                    onChangeText={setFormCal}
-                    keyboardType="numeric"
-                  />
-                  <TextInput
-                    style={[styles.formInput, { flex: 1 }]}
-                    placeholder="Protein (g)"
-                    placeholderTextColor={theme.colors.textMuted}
-                    value={formProtein}
-                    onChangeText={setFormProtein}
-                    keyboardType="numeric"
-                  />
-                </View>
-                <View style={styles.storeRow}>
-                  {GROCERY_STORES.map((s) => (
-                    <TouchableOpacity
-                      key={s}
-                      style={[
-                        styles.storePill,
-                        formStore === s && styles.storePillActive,
-                      ]}
-                      onPress={() => setFormStore(s)}
-                    >
-                      <Text
-                        style={[
-                          styles.storePillText,
-                          formStore === s && styles.storePillTextActive,
-                        ]}
-                      >
-                        {s}
+            <View style={styles.swapSearchWrap}>
+              <Ionicons name="search-outline" size={16} color={theme.colors.textMuted} />
+              <TextInput
+                style={styles.swapSearchInput}
+                placeholder="Search meals..."
+                placeholderTextColor={theme.colors.textMuted}
+                value={search}
+                onChangeText={setSearch}
+              />
+            </View>
+            <TouchableOpacity style={styles.addMealBtn} onPress={onCreateMeal}>
+              <Ionicons name="add-circle-outline" size={18} color={theme.colors.accent} />
+              <Text style={styles.addMealText}>Create custom meal</Text>
+            </TouchableOpacity>
+            <FlatList
+              data={filtered}
+              keyExtractor={(item) => item.id}
+              style={{ maxHeight: 350 }}
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item }) => {
+                const isCustom = item.source === "custom";
+                return (
+                  <TouchableOpacity
+                    style={styles.swapItem}
+                    onPress={() => onSelect(item.id)}
+                    onLongPress={isCustom ? () => onEditMeal(item.id) : undefined}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.swapItemName}>
+                        {item.name}
+                        {isCustom ? " *" : ""}
                       </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <TouchableOpacity
-                  style={[styles.createBtn, !formName.trim() && { opacity: 0.4 }]}
-                  onPress={handleCreateMeal}
-                  disabled={!formName.trim()}
-                >
-                  <Text style={styles.createBtnText}>Create & assign</Text>
-                </TouchableOpacity>
-              </ScrollView>
-            ) : (
-              <>
-                <View style={styles.swapSearchWrap}>
-                  <Ionicons name="search-outline" size={16} color={theme.colors.textMuted} />
-                  <TextInput
-                    style={styles.swapSearchInput}
-                    placeholder="Search meals..."
-                    placeholderTextColor={theme.colors.textMuted}
-                    value={search}
-                    onChangeText={setSearch}
-                  />
-                </View>
-                <TouchableOpacity
-                  style={styles.addMealBtn}
-                  onPress={() => setShowForm(true)}
-                >
-                  <Ionicons name="add-circle-outline" size={18} color={theme.colors.accent} />
-                  <Text style={styles.addMealText}>Create custom meal</Text>
-                </TouchableOpacity>
-                <FlatList
-                  data={filtered}
-                  keyExtractor={(item) => item.id}
-                  style={{ maxHeight: 350 }}
-                  showsVerticalScrollIndicator={false}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={styles.swapItem}
-                      onPress={() => onSelect(item.id)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.swapItemName}>
-                          {item.name}
-                          {item.id.startsWith("custom-") ? " *" : ""}
-                        </Text>
-                        <Text style={styles.swapItemMeta}>
-                          {item.calories} cal · {item.protein}g protein · {item.store}
-                        </Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
-                    </TouchableOpacity>
-                  )}
-                />
-              </>
-            )}
+                      <Text style={styles.swapItemMeta}>
+                        {item.calories} cal · {item.protein}g protein · {item.store}
+                        {isCustom ? " · long-press to edit" : ""}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+                  </TouchableOpacity>
+                );
+              }}
+            />
           </Pressable>
         </KeyboardAvoidingView>
       </Pressable>
@@ -378,6 +284,7 @@ export default function CookbookScreen() {
   const [swapVisible, setSwapVisible] = useState(false);
   const [swapDay, setSwapDay] = useState("");
   const [swapSlot, setSwapSlot] = useState<MealSlot>("breakfast");
+  const mealsVersion = useMealsVersion();
 
   const loadPlans = useCallback(async () => {
     const [allPlans, today] = await Promise.all([
@@ -391,7 +298,7 @@ export default function CookbookScreen() {
 
   useEffect(() => {
     loadPlans();
-  }, [loadPlans]);
+  }, [loadPlans, mealsVersion]);
 
   const handleSwapMeal = useCallback(
     (dayLabel: string, slot: MealSlot) => {
@@ -406,10 +313,19 @@ export default function CookbookScreen() {
     async (mealId: string) => {
       await setMealSlot(swapDay, swapSlot, mealId);
       setSwapVisible(false);
-      await loadPlans();
     },
-    [swapDay, swapSlot, loadPlans]
+    [swapDay, swapSlot]
   );
+
+  const handleEditMeal = useCallback((id: string) => {
+    setSwapVisible(false);
+    router.push({ pathname: "/meal-editor", params: { id } });
+  }, []);
+
+  const handleCreateMeal = useCallback(() => {
+    setSwapVisible(false);
+    router.push("/meal-editor");
+  }, []);
 
   if (loading) {
     return (
@@ -451,6 +367,8 @@ export default function CookbookScreen() {
         dayLabel={swapDay}
         onSelect={handleSelectMeal}
         onClose={() => setSwapVisible(false)}
+        onEditMeal={handleEditMeal}
+        onCreateMeal={handleCreateMeal}
       />
     </View>
   );
@@ -506,13 +424,4 @@ const styles = StyleSheet.create({
   swapItem: { flexDirection: "row", alignItems: "center", padding: theme.spacing.md, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.bg, marginBottom: 6 },
   swapItemName: { fontSize: theme.font.size.sm, fontWeight: "600", color: theme.colors.text, marginBottom: 2 },
   swapItemMeta: { fontSize: theme.font.size.xs, color: theme.colors.textMuted },
-  // Custom meal form
-  formInput: { backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.md, padding: theme.spacing.md, fontSize: theme.font.size.sm, color: theme.colors.text, marginBottom: theme.spacing.sm },
-  storeRow: { flexDirection: "row", gap: 8, marginBottom: theme.spacing.md },
-  storePill: { flex: 1, paddingVertical: 10, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, alignItems: "center" },
-  storePillActive: { borderColor: theme.colors.accent, backgroundColor: theme.colors.accentGlow },
-  storePillText: { fontSize: theme.font.size.xs, fontWeight: "600", color: theme.colors.textMuted },
-  storePillTextActive: { color: theme.colors.accent },
-  createBtn: { backgroundColor: theme.colors.accent, borderRadius: theme.radius.md, paddingVertical: 14, alignItems: "center" },
-  createBtnText: { color: theme.colors.bg, fontSize: theme.font.size.md, fontWeight: "700" },
 });

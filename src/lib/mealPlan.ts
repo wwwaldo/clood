@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type GroceryStore = "Loblaws" | "Metro" | "T&T";
@@ -8,6 +9,8 @@ export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
 
 export const MEAL_SLOTS: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"];
 
+export type MealSource = "library" | "custom";
+
 export interface Meal {
   id: string;
   name: string;
@@ -17,7 +20,24 @@ export interface Meal {
   ingredients: string[];
   steps: string[];
   store: GroceryStore;
+  source: MealSource;
+  createdAt: number;
+  updatedAt: number;
+  // Optional macros and metadata
+  carbs?: number;
+  fat?: number;
+  fiber?: number;
+  prepMinutes?: number;
+  cookMinutes?: number;
+  servings?: number;
+  tags?: string[];
 }
+
+// Editable fields for a custom meal (everything except id/source/createdAt)
+export type MealPatch = Partial<Omit<Meal, "id" | "source" | "createdAt" | "updatedAt">>;
+
+// Input shape for creating a new custom meal
+export type MealInput = Omit<Meal, "id" | "source" | "createdAt" | "updatedAt">;
 
 export interface DayPlan {
   label: string;
@@ -51,8 +71,12 @@ const USER_PLAN_KEY = "clood_user_meal_plan";
 const CUSTOM_MEALS_KEY = "clood_custom_meals";
 
 // --- Preset Meal Library ---
+// Stored as raw entries; source/timestamps are stamped on at export time
+// so we don't have to repeat them in every literal below.
 
-export const MEAL_LIBRARY: Meal[] = [
+type PresetMeal = Omit<Meal, "source" | "createdAt" | "updatedAt">;
+
+const MEAL_LIBRARY_RAW: PresetMeal[] = [
   // Monday defaults
   {
     id: "greek-yogurt-parfait",
@@ -314,6 +338,13 @@ export const MEAL_LIBRARY: Meal[] = [
   },
 ];
 
+export const MEAL_LIBRARY: Meal[] = MEAL_LIBRARY_RAW.map((m) => ({
+  ...m,
+  source: "library" as const,
+  createdAt: 0,
+  updatedAt: 0,
+}));
+
 // --- Default plan (maps day → slot → meal ID) ---
 
 const DEFAULT_PLAN: WeeklyPlanConfig = {
@@ -326,21 +357,102 @@ const DEFAULT_PLAN: WeeklyPlanConfig = {
   sunday: { breakfast: "breakfast-burrito", lunch: "lentil-soup", dinner: "roast-chicken-root-veg", snack: "berries-dark-chocolate" },
 };
 
+// --- Change subscription ---
+// Anything that mutates meals or the plan calls emitMealsChanged().
+// React screens use useMealsVersion() to re-fetch when version bumps.
+
+type MealListener = () => void;
+const listeners = new Set<MealListener>();
+let mealsVersion = 0;
+
+function emitMealsChanged() {
+  mealsVersion++;
+  for (const l of listeners) {
+    try { l(); } catch { /* ignore listener errors */ }
+  }
+}
+
+export function subscribeMeals(listener: MealListener): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+export function useMealsVersion(): number {
+  const [v, setV] = useState(mealsVersion);
+  useEffect(() => subscribeMeals(() => setV(mealsVersion)), []);
+  return v;
+}
+
 // --- Custom meal storage ---
+
+// Migrate older stored records that pre-date source/timestamps so the rest of
+// the code can assume all three are always present.
+function migrateCustomMeal(raw: Partial<Meal> & { id: string }): Meal {
+  return {
+    id: raw.id,
+    name: raw.name ?? "",
+    description: raw.description ?? "",
+    calories: raw.calories ?? 0,
+    protein: raw.protein ?? 0,
+    ingredients: raw.ingredients ?? [],
+    steps: raw.steps ?? [],
+    store: raw.store ?? "Loblaws",
+    source: "custom",
+    createdAt: raw.createdAt ?? 0,
+    updatedAt: raw.updatedAt ?? raw.createdAt ?? 0,
+    carbs: raw.carbs,
+    fat: raw.fat,
+    fiber: raw.fiber,
+    prepMinutes: raw.prepMinutes,
+    cookMinutes: raw.cookMinutes,
+    servings: raw.servings,
+    tags: raw.tags,
+  };
+}
 
 export async function getCustomMeals(): Promise<Meal[]> {
   const raw = await AsyncStorage.getItem(CUSTOM_MEALS_KEY);
   if (!raw) return [];
-  try { return JSON.parse(raw); } catch { return []; }
+  try {
+    const parsed = JSON.parse(raw) as Array<Partial<Meal> & { id: string }>;
+    return parsed.map(migrateCustomMeal);
+  } catch {
+    return [];
+  }
 }
 
-export async function saveCustomMeal(meal: Omit<Meal, "id">): Promise<Meal> {
+export async function saveCustomMeal(meal: MealInput): Promise<Meal> {
   const customs = await getCustomMeals();
-  const id = `custom-${Date.now()}`;
-  const newMeal: Meal = { ...meal, id };
+  const now = Date.now();
+  const newMeal: Meal = {
+    ...meal,
+    id: `custom-${now}`,
+    source: "custom",
+    createdAt: now,
+    updatedAt: now,
+  };
   customs.push(newMeal);
   await AsyncStorage.setItem(CUSTOM_MEALS_KEY, JSON.stringify(customs));
+  emitMealsChanged();
   return newMeal;
+}
+
+export async function updateCustomMeal(id: string, patch: MealPatch): Promise<Meal | null> {
+  const customs = await getCustomMeals();
+  const idx = customs.findIndex((m) => m.id === id);
+  if (idx === -1) return null;
+  const updated: Meal = {
+    ...customs[idx],
+    ...patch,
+    id: customs[idx].id,
+    source: "custom",
+    createdAt: customs[idx].createdAt,
+    updatedAt: Date.now(),
+  };
+  customs[idx] = updated;
+  await AsyncStorage.setItem(CUSTOM_MEALS_KEY, JSON.stringify(customs));
+  emitMealsChanged();
+  return updated;
 }
 
 export async function deleteCustomMeal(id: string): Promise<void> {
@@ -349,6 +461,7 @@ export async function deleteCustomMeal(id: string): Promise<void> {
     CUSTOM_MEALS_KEY,
     JSON.stringify(customs.filter((m) => m.id !== id))
   );
+  emitMealsChanged();
 }
 
 // --- Meal lookup (library + custom) ---
@@ -395,10 +508,12 @@ export async function setMealSlot(
   if (!plan[dayKey]) return;
   plan[dayKey][slot] = mealId;
   await AsyncStorage.setItem(USER_PLAN_KEY, JSON.stringify(plan));
+  emitMealsChanged();
 }
 
 export async function resetPlan(): Promise<void> {
   await AsyncStorage.removeItem(USER_PLAN_KEY);
+  emitMealsChanged();
 }
 
 // --- Resolve plan to DayPlan objects ---
